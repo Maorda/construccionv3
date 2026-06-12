@@ -1,12 +1,15 @@
 import { Controller, Get } from '@nestjs/common';
-import { AppService } from './app.service';
+import { DataSourceManager } from './lib/core/data-source-manager';
 
-@Controller()
+@Controller('health')
 export class AppController {
-  constructor(private readonly appService: AppService) {}
+    constructor(
+        private readonly dataSourceManager: DataSourceManager,
+    ) { }
 
-  @Get()
-  getHello(): string {
-    return this.appService.getHello();
-  }
+    @Get()
+    async checkSystem() {
+        // Delegamos toda la responsabilidad a nuestra flamante librería
+        return await this.dataSourceManager.checkAllHealth();
+    }
 }

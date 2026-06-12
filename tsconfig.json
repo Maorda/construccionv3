@@ -1,25 +1,29 @@
 {
   "compilerOptions": {
-    "module": "nodenext",
-    "moduleResolution": "nodenext",
-    "resolvePackageJsonExports": true,
-    "esModuleInterop": true,
-    "isolatedModules": true,
+    "target": "ES2022",
+    "module": "commonjs",
+    "moduleResolution": "node",
     "declaration": true,
-    "removeComments": true,
-    "emitDecoratorMetadata": true,
-    "experimentalDecorators": true,
-    "allowSyntheticDefaultImports": true,
-    "target": "ES2023",
+    "declarationMap": true,
     "sourceMap": true,
     "outDir": "./dist",
-    "baseUrl": "./",
-    "incremental": true,
+    "strict": true,
+    "esModuleInterop": true,
     "skipLibCheck": true,
-    "strictNullChecks": true,
-    "forceConsistentCasingInFileNames": true,
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "isolatedModules": false,
+    "baseUrl": "./",
+    "strictPropertyInitialization": false,
     "noImplicitAny": false,
-    "strictBindCallApply": false,
-    "noFallthroughCasesInSwitch": false
-  }
+    "paths": {
+      "@sheetOdm/*": [
+        "src/lib/*"
+      ]
+    }
+  },
+  "include": [
+    "src/**/*",
+    "tsup.config.ts"
+  ]
 }
