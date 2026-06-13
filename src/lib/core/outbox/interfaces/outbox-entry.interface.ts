@@ -10,7 +10,12 @@ export enum TypeOp {
     UPDATE = 'UPDATE',
     DELETE = 'DELETE'
 }
-
+export interface CreateOutboxEntryDto {
+    entityName: string;
+    operation: 'CREATE' | 'UPDATE' | 'DELETE';
+    sheetName: string;
+    payload: any;
+}
 export interface OutboxEntry {
     id: string;
     entityName: string;

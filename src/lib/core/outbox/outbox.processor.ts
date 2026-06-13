@@ -89,6 +89,7 @@ export class OutboxProcessor implements OnApplicationBootstrap, OnApplicationShu
         }
     }
 
+
     private async processGroup(entityName: string, tasks: any[]) {
         const entityClass = this.metadataRegistry.getEntityByName(entityName);
 
@@ -107,16 +108,27 @@ export class OutboxProcessor implements OnApplicationBootstrap, OnApplicationShu
             await this.markAs(tasks, OutboxStatus.FAILED, err.message);
             return;
         }
+        // 🔥 AQUÍ INICIA LA TELEMETRÍA DE RENDIMIENTO HACIA GOOGLE SHEETS
+        const startTime = Date.now();
 
         try {
             // Pasamos el payload o doc. Si en Postgres es un JSONB, el driver 'pg' ya lo parsea.
             const documents = tasks.map(t => t.payload || t.doc);
             await repo.commitBulk(documents);
-
+            const duration = Date.now() - startTime; // ⏱️ Calculamos el tiempo transcurrido
             await this.markAs(tasks, OutboxStatus.COMPLETED);
-            this.logger.log(`✅ ${tasks.length} registros de [${entityName}] sincronizados.`);
+            // 📊 Log de éxito con métricas
+            this.logger.log(
+                `✅ [GAS SYNC SUCCESS] ${tasks.length} registros de [${entityName}] sincronizados. | ⏱️ Tiempo API Google: ${duration}ms`
+            );
         } catch (error: any) {
-            this.logger.error(`⚠️ Falló lote de ${entityName}. Degragando a reintento individual...`);
+            const duration = Date.now() - startTime; // ⏱️ Calculamos cuánto tardó en fallar
+
+            // 📊 Log de error con métricas
+            this.logger.error(
+                `⚠️ [GAS SYNC FAILED] Falló lote de ${entityName}. | ⏱️ Tiempo hasta fallo: ${duration}ms | Error: ${error.message}. Degradando a reintento individual...`
+            );
+
             for (const task of tasks) {
                 await this.handleIndividualFailure(task, error.message);
             }

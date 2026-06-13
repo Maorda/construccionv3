@@ -13,6 +13,7 @@ import { OutboxProcessor } from './core/outbox/outbox.processor';
 import { OutboxModule } from './core/outbox/outbox.module';
 import { OutboxService } from './core/outbox/interfaces/outbox-entry.interface';
 import { HttpModule } from '@nestjs/axios';
+import { UowModule } from './core/uow/uow.module';
 
 
 
@@ -70,11 +71,15 @@ export class SheetOdmModule {
     }
     return {
       module: SheetOdmModule,
-      imports: [HttpModule, ...(options.imports || []), OutboxModule.registerAsync({
-        useFactory: options.useFactory,
-        inject: options.inject,
-        imports: options.imports,
-      })],
+      imports: [
+        HttpModule,
+        UowModule,
+        ...(options.imports || []),
+        OutboxModule.registerAsync({
+          useFactory: options.useFactory,
+          inject: options.inject,
+          imports: options.imports,
+        })],
       providers: [
         ...this.createAsyncProviders(options),
         { provide: APP_INTERCEPTOR, useClass: GasTelemetryInterceptor },
@@ -101,11 +106,14 @@ export class SheetOdmModule {
         GoogleHealthService,
         MetadataRegistry,
       ],
-      exports: [PostgresProvider, // Exportamos la clase
+      exports: [
+        UowModule,
+        PostgresProvider, // Exportamos la clase
         POSTGRES_TOKEN,   // Exportamos el token
         DataSourceManager,
         MetadataRegistry,
-        OutboxModule],
+        OutboxModule
+      ],
     };
   }
 

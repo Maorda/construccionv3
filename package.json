@@ -46,7 +46,9 @@
     "@nestjs/testing": "^11.1.26",
     "axios": "^1.17.0",
     "googleapis": "^173.0.0",
+    "nanoid": "^5.1.11",
     "pg": "^8.21.0",
-    "reflect-metadata": "^0.2.2"
+    "reflect-metadata": "^0.2.2",
+    "uuid": "^14.0.0"
   }
 }

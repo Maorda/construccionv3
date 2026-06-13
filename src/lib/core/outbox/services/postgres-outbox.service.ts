@@ -1,5 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { OutboxEntry, OutboxService, OutboxStatus } from '../interfaces/outbox-entry.interface';
+import { CreateOutboxEntryDto, OutboxEntry, OutboxService, OutboxStatus } from '../interfaces/outbox-entry.interface';
 import { IPostgresProvider } from '../../../interfaces/provider.interface';
 
 @Injectable()
@@ -74,6 +74,40 @@ export class PostgresOutboxService extends OutboxService {
             throw error;
         } finally {
             client.release(); // Devuelve el cliente al pool inmediatamente
+        }
+    }
+    async enqueue(entry: CreateOutboxEntryDto): Promise<void> {
+        // Los campos 'id' (BIGSERIAL), 'started_at', 'finished_at' y 'error' 
+        // se omiten intencionalmente porque son automáticos o nulos al inicio.
+        const query = `
+    INSERT INTO outbox_entries (
+      entity_name, 
+      operation, 
+      status, 
+      sheet_name, 
+      payload, 
+      attempts, 
+      created_at, 
+      updated_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+  `;
+
+        // Preparamos los valores asegurando los defaults explícitos
+        const values = [
+            entry.entityName,
+            entry.operation,
+            'PENDING',           // status
+            entry.sheetName,
+            JSON.stringify(entry.payload),
+            0,                   // attempts iniciales
+            new Date(),          // created_at
+            new Date()           // updated_at
+        ];
+
+        try {
+            await this.pg.query(query, values);
+        } catch (error: any) {
+            throw new Error(`❌ Fallo crítico al encolar en Outbox: ${error.message}`);
         }
     }
 }
