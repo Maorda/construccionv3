@@ -8,6 +8,7 @@ import { SHEET_ODM_OPTIONS } from '@sheetOdm/shared/constants/constants';
 export class GoogleSheetProvider {
     private _sheets: any;
     private _drive: any;
+    private _script: any; // Nuevo
 
     constructor(
         @Inject(SHEET_ODM_OPTIONS) private config: SheetOdmModuleOptions,
@@ -15,6 +16,12 @@ export class GoogleSheetProvider {
         if (!this.config) {
             console.error("❌ GoogleAuthProvider: 'CONFIG' es undefined en el constructor");
         }
+    }
+    get script() {
+        if (!this._script) {
+            this.initialize();
+        }
+        return this._script;
     }
 
     // Usamos un Getter para inicialización bajo demanda (lazy-loading)
@@ -53,11 +60,13 @@ export class GoogleSheetProvider {
                 'https://www.googleapis.com/auth/drive.readonly',
                 'https://www.googleapis.com/auth/spreadsheets',
                 'https://www.googleapis.com/auth/spreadsheets.readonly',
-                'https://www.googleapis.com/auth/drive.metadata.readonly'
+                'https://www.googleapis.com/auth/drive.metadata.readonly',
+                'https://www.googleapis.com/auth/script.external_request'
             ],
         });
 
         this._drive = google.drive({ version: 'v3', auth });
         this._sheets = google.sheets({ version: 'v4', auth });
+        this._script = google.script({ version: 'v1', auth });
     }
 }

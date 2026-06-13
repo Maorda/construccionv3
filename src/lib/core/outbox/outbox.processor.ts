@@ -1,13 +1,12 @@
+// src/lib/core/outbox/outbox.processor.ts
 import { Inject, Injectable, Logger, OnApplicationBootstrap, OnApplicationShutdown, OnModuleDestroy } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { OutboxStatus, OutboxEntry } from './interfaces/outbox-entry.interface';
 import { IPostgresProvider } from '../../interfaces/provider.interface';
 import { MetadataRegistry } from '../metadata/metadata.registry';
 import { SheetOdmModuleOptions } from '../../interfaces/sheet-odm-options.interface';
-import { getRepositoryToken } from '@sheetOdm/utils/getRepositoryToken';
-import { POSTGRES_TOKEN, SHEET_ODM_OPTIONS } from '@sheetOdm/shared/constants/constants';
-
-
+import { getRepositoryToken } from '../../utils/getRepositoryToken';
+import { POSTGRES_TOKEN, SHEET_ODM_OPTIONS } from '../../shared/constants/constants';
 
 @Injectable()
 export class OutboxProcessor implements OnApplicationBootstrap, OnApplicationShutdown, OnModuleDestroy {
@@ -24,7 +23,7 @@ export class OutboxProcessor implements OnApplicationBootstrap, OnApplicationShu
     ) { }
 
     onApplicationBootstrap() {
-        this.logger.log('🚀 Outbox Processor inicializado (Modo Postgres Nativo).');
+        this.logger.log('🚀 Outbox Processor inicializado (Modo Resiliente Avanzado).');
         this.scheduleNextTick();
     }
 
@@ -45,19 +44,25 @@ export class OutboxProcessor implements OnApplicationBootstrap, OnApplicationShu
         this.isRunning = true;
 
         try {
-            // 1. Obtener tareas usando SQL crudo a través de tu PostgresProvider
+            // 🔥 MEJORA: Solo seleccionamos tareas que ya cumplieron su tiempo de espera (Backoff)
             const result = await this.pg.query<OutboxEntry>(
                 `SELECT * FROM outbox_entries 
                  WHERE status IN ($1, $2) 
+                   AND (next_attempt_at IS NULL OR next_attempt_at <= CURRENT_TIMESTAMP)
                  ORDER BY created_at ASC 
                  LIMIT 50`,
                 [OutboxStatus.PENDING, OutboxStatus.FAILED]
             );
 
             const pendingTasks = result.rows;
-            if (pendingTasks.length === 0) return;
 
-            // Transición a PROCESSING usando ANY() para actualizar en bloque
+            // Si no hay tareas, aprovechamos el tiempo ocioso para limpiar la casa
+            if (pendingTasks.length === 0) {
+                await this.purgeOldCompletedTasks();
+                return;
+            }
+
+            // Transición a PROCESSING
             const taskIds = pendingTasks.map(t => t.id);
             await this.pg.query(
                 `UPDATE outbox_entries 
@@ -66,16 +71,15 @@ export class OutboxProcessor implements OnApplicationBootstrap, OnApplicationShu
                 [OutboxStatus.PROCESSING, taskIds]
             );
 
-            // 2. Agrupar tareas por Entidad (Manejando camelCase vs snake_case si aplica)
+            // Agrupar tareas por Entidad
             const groupedTasks: Record<string, typeof pendingTasks> = {};
             for (const task of pendingTasks) {
-                // Asegúrate de que task.entity_name coincida con el nombre de tu columna en BD
                 const entityName = task.entityName || (task as any).entity_name;
                 if (!groupedTasks[entityName]) groupedTasks[entityName] = [];
                 groupedTasks[entityName].push(task);
             }
 
-            // 3. Procesar cada grupo
+            // Procesar cada grupo
             for (const [entityName, tasks] of Object.entries(groupedTasks)) {
                 if (this.isShuttingDown) break;
                 await this.processGroup(entityName, tasks);
@@ -89,7 +93,6 @@ export class OutboxProcessor implements OnApplicationBootstrap, OnApplicationShu
         }
     }
 
-
     private async processGroup(entityName: string, tasks: any[]) {
         const entityClass = this.metadataRegistry.getEntityByName(entityName);
 
@@ -100,7 +103,6 @@ export class OutboxProcessor implements OnApplicationBootstrap, OnApplicationShu
         }
         let repo: any;
         try {
-
             const repoToken = getRepositoryToken(entityClass);
             repo = this.moduleRef.get(repoToken, { strict: false });
         } catch (err: any) {
@@ -108,27 +110,19 @@ export class OutboxProcessor implements OnApplicationBootstrap, OnApplicationShu
             await this.markAs(tasks, OutboxStatus.FAILED, err.message);
             return;
         }
-        // 🔥 AQUÍ INICIA LA TELEMETRÍA DE RENDIMIENTO HACIA GOOGLE SHEETS
+
         const startTime = Date.now();
 
         try {
-            // Pasamos el payload o doc. Si en Postgres es un JSONB, el driver 'pg' ya lo parsea.
             const documents = tasks.map(t => t.payload || t.doc);
             await repo.commitBulk(documents);
-            const duration = Date.now() - startTime; // ⏱️ Calculamos el tiempo transcurrido
+
+            const duration = Date.now() - startTime;
             await this.markAs(tasks, OutboxStatus.COMPLETED);
-            // 📊 Log de éxito con métricas
-            this.logger.log(
-                `✅ [GAS SYNC SUCCESS] ${tasks.length} registros de [${entityName}] sincronizados. | ⏱️ Tiempo API Google: ${duration}ms`
-            );
+            this.logger.log(`✅ [GAS SYNC SUCCESS] ${tasks.length} registros de [${entityName}] sincronizados. | ⏱️ Latencia: ${duration}ms`);
         } catch (error: any) {
-            const duration = Date.now() - startTime; // ⏱️ Calculamos cuánto tardó en fallar
-
-            // 📊 Log de error con métricas
-            this.logger.error(
-                `⚠️ [GAS SYNC FAILED] Falló lote de ${entityName}. | ⏱️ Tiempo hasta fallo: ${duration}ms | Error: ${error.message}. Degradando a reintento individual...`
-            );
-
+            const duration = Date.now() - startTime;
+            this.logger.error(`⚠️ [GAS SYNC FAILED] Falló lote de ${entityName}. | ⏱️ Tiempo: ${duration}ms. Aplicando Backoff Exponencial...`);
             for (const task of tasks) {
                 await this.handleIndividualFailure(task, error.message);
             }
@@ -141,22 +135,56 @@ export class OutboxProcessor implements OnApplicationBootstrap, OnApplicationShu
 
         await this.pg.query(
             `UPDATE outbox_entries 
-             SET status = $1, finished_at = $2, error = $3 
+             SET status = $1, finished_at = $2, error = $3, next_attempt_at = NULL 
              WHERE id = ANY($4)`,
             [status, finishedAt, errorMsg, taskIds]
         );
     }
 
+    // 🔥 MEJORA: Algoritmo de Backoff Exponencial
     private async handleIndividualFailure(task: any, errorMessage: string) {
         const attempts = (task.attempts || 0) + 1;
-        const status = attempts >= 5 ? OutboxStatus.FAILED : OutboxStatus.PENDING;
 
-        await this.pg.query(
-            `UPDATE outbox_entries 
-             SET status = $1, attempts = $2, error = $3, updated_at = CURRENT_TIMESTAMP 
-             WHERE id = $4`,
-            [status, attempts, errorMessage, task.id]
-        );
+        if (attempts >= 5) {
+            // Si ya falló 5 veces, queda en FAILED definitivamente
+            await this.pg.query(
+                `UPDATE outbox_entries 
+                 SET status = $1, attempts = $2, error = $3, updated_at = CURRENT_TIMESTAMP, next_attempt_at = NULL 
+                 WHERE id = $4`,
+                [OutboxStatus.FAILED, attempts, errorMessage, task.id]
+            );
+        } else {
+            // Multiplicamos el tiempo de espera de forma exponencial: 2^intentos * 10 segundos
+            // Intento 1: Espera 20 segundos
+            // Intento 2: Espera 40 segundos
+            // Intento 3: Espera 80 segundos... dando tiempo a que las cuotas de Google se reinicien
+            const secondsToWait = Math.pow(2, attempts) * 10;
+            const nextAttemptAt = new Date(Date.now() + secondsToWait * 1000);
+
+            await this.pg.query(
+                `UPDATE outbox_entries 
+                 SET status = $1, attempts = $2, error = $3, updated_at = CURRENT_TIMESTAMP, next_attempt_at = $4 
+                 WHERE id = $5`,
+                [OutboxStatus.PENDING, attempts, errorMessage, nextAttemptAt, task.id]
+            );
+        }
+    }
+
+    // 🔥 MEJORA: Eliminación automática de registros viejos procesados con éxito
+    private async purgeOldCompletedTasks() {
+        try {
+            // Borra registros que lleven más de 24 horas completados con éxito
+            const result = await this.pg.query(
+                `DELETE FROM outbox_entries 
+                 WHERE status = $1 AND finished_at < NOW() - INTERVAL '1 day'`,
+                [OutboxStatus.COMPLETED]
+            );
+            if (result.rowCount && result.rowCount > 0) {
+                this.logger.log(`🧹 [Mantenimiento] Se eliminaron ${result.rowCount} registros antiguos de la Outbox.`);
+            }
+        } catch (error) {
+            this.logger.error('❌ Error al ejecutar el mantenimiento de la Outbox', error);
+        }
     }
 
     onModuleDestroy() {
