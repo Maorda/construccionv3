@@ -1,7 +1,8 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { GoogleDriveConfig } from '../interfaces/sheet-odm-options.interface';
+import { GoogleDriveConfig, SheetOdmModuleOptions } from '../interfaces/sheet-odm-options.interface';
 import { google } from 'googleapis';
 import { sheets_v4, drive_v3 } from 'googleapis';
+import { SHEET_ODM_OPTIONS } from '@sheetOdm/shared/constants/constants';
 
 @Injectable()
 export class GoogleSheetProvider {
@@ -9,7 +10,7 @@ export class GoogleSheetProvider {
     private _drive: any;
 
     constructor(
-        @Inject('CONFIG') private config: GoogleDriveConfig,
+        @Inject(SHEET_ODM_OPTIONS) private config: SheetOdmModuleOptions,
     ) {
         if (!this.config) {
             console.error("❌ GoogleAuthProvider: 'CONFIG' es undefined en el constructor");
@@ -32,16 +33,19 @@ export class GoogleSheetProvider {
     }
 
     private initialize() {
-        if (!this.config || !this.config.client_email) {
+        // Extraemos de forma segura el sub-objeto de credenciales
+        const googleConfig = this.config.googleDriveConfig;
+
+        if (!googleConfig || !googleConfig.client_email) {
             throw new Error(
-                "Configuración de Google no cargada. Verifica que 'DATABASE_OPTIONS' o 'CONFIG' se estén pasando correctamente en el Module."
+                "Configuración de Google no cargada en googleDriveConfig. Verifica tu .env o AppModule."
             );
         }
 
         const auth = new google.auth.GoogleAuth({
             credentials: {
-                client_email: this.config.client_email,
-                private_key: this.config.private_key,
+                client_email: googleConfig.client_email,
+                private_key: googleConfig.private_key,
             },
             scopes: [
                 'https://www.googleapis.com/auth/drive',

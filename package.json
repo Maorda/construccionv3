@@ -22,9 +22,9 @@
     "start:dev": "ts-node-dev -r tsconfig-paths/register --respawn --transpile-only src/main.ts"
   },
   "peerDependencies": {
-    "@nestjs/common": ">=9.0.0",
-    "@nestjs/core": ">=9.0.0",
-    "rxjs": ">=7.0.0"
+    "@nestjs/common": "^11.1.26",
+    "@nestjs/core": "^11.1.26",
+    "rxjs": "^7.8.2"
   },
   "devDependencies": {
     "@nestjs/testing": "^11.1.26",
@@ -40,9 +40,13 @@
     "typescript": "^5.0.0"
   },
   "dependencies": {
+    "@nestjs/axios": "^4.0.1",
     "@nestjs/config": "^4.0.4",
+    "@nestjs/platform-express": "^11.1.26",
     "@nestjs/testing": "^11.1.26",
+    "axios": "^1.17.0",
     "googleapis": "^173.0.0",
-    "pg": "^8.21.0"
+    "pg": "^8.21.0",
+    "reflect-metadata": "^0.2.2"
   }
 }
