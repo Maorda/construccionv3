@@ -15,37 +15,81 @@ export class PostgresProvider implements IPostgresProvider, OnApplicationBootstr
     // Inicializamos la conexión automáticamente al arrancar NestJS
     async onApplicationBootstrap() {
         await this.connect();
-        await this.ensureOutboxTableExists();
+        // Cambiamos a un método de sincronización más robusto
+        await this.syncOutboxSchema();
     }
 
-    private async ensureOutboxTableExists(): Promise<void> {
-        const queryText = `
-        CREATE TABLE IF NOT EXISTS outbox_entries (
-            id BIGSERIAL PRIMARY KEY,
-            entity_name VARCHAR(255) NOT NULL,
-            operation VARCHAR(50) NOT NULL,
-            status VARCHAR(50) DEFAULT 'PENDING',
-            sheet_name VARCHAR(255) NOT NULL,
-            payload JSONB NOT NULL,
-            attempts INT DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            started_at TIMESTAMP,
-            finished_at TIMESTAMP,
-            error TEXT
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_outbox_processor_status 
-        ON outbox_entries (status, created_at ASC);
-    `;
-
+    /**
+     * Sincroniza el esquema de la base de datos:
+     * 1. Crea la tabla si no existe.
+     * 2. Verifica y añade columnas faltantes (evolución del esquema).
+     */
+    private async syncOutboxSchema(): Promise<void> {
         try {
-            await this.pool.query(queryText);
-            this.logger.log('📊 Estructura de tabla [outbox_entries] verificada/creada correctamente.');
+            // 1. Crear tabla base
+            const createTableQuery = `
+                CREATE TABLE IF NOT EXISTS outbox_entries (
+                    id BIGSERIAL PRIMARY KEY,
+                    entity_name VARCHAR(255) NOT NULL,
+                    operation VARCHAR(50) NOT NULL,
+                    status VARCHAR(50) DEFAULT 'PENDING',
+                    sheet_name VARCHAR(255) NOT NULL,
+                    payload JSONB NOT NULL,
+                    attempts INT DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    started_at TIMESTAMP,
+                    finished_at TIMESTAMP,
+                    error TEXT
+                );
+            `;
+            await this.pool.query(createTableQuery);
+
+            // 2. Sincronizar columnas específicas (Evolución de esquema)
+            // Aquí puedes añadir más columnas en el futuro siguiendo este patrón
+            await this.addColumnIfMissing('outbox_entries', 'next_attempt_at', 'TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP');
+
+            // 3. Crear índices (si no existen)
+            await this.pool.query(`
+                CREATE INDEX IF NOT EXISTS idx_outbox_processor_status 
+                ON outbox_entries (status, created_at ASC);
+            `);
+
+            // AGREGAR: Nueva tabla para diagnósticos de lectura
+            await this.pool.query(`
+            CREATE TABLE IF NOT EXISTS read_logs (
+                id BIGSERIAL PRIMARY KEY,
+                sheet_name VARCHAR(255) NOT NULL,
+                operation VARCHAR(50) NOT NULL,
+                latency_ms INT DEFAULT 0,
+                success BOOLEAN DEFAULT TRUE,
+                error TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `);
+
+            this.logger.log('📊 Esquema de [outbox_entries] sincronizado correctamente.');
         } catch (error: any) {
-            this.logger.error(`❌ Error crítico al inicializar la tabla de Outbox: ${error.message}`, error.stack);
-            // Dependiendo de tu diseño, puedes lanzar el error para detener el arranque si es vital
+            this.logger.error(`❌ Error al sincronizar esquema de Outbox: ${error.message}`);
             throw error;
+        }
+    }
+
+    /**
+     * Verifica si una columna existe y la crea si es necesario
+     */
+    private async addColumnIfMissing(tableName: string, columnName: string, columnType: string): Promise<void> {
+        const checkQuery = `
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name = $1 AND column_name = $2;
+        `;
+        const res = await this.pool.query(checkQuery, [tableName, columnName]);
+
+        if (res.rowCount === 0) {
+            this.logger.warn(`⚠️ Columna '${columnName}' no encontrada en '${tableName}'. Creándola...`);
+            await this.pool.query(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnType}`);
+            this.logger.log(`✅ Columna '${columnName}' añadida con éxito.`);
         }
     }
 
@@ -53,43 +97,24 @@ export class PostgresProvider implements IPostgresProvider, OnApplicationBootstr
         const pgConfig = this.config.postgres;
 
         if (!pgConfig) {
-            this.logger.warn('⚠️ Configuración de Postgres no proporcionada. El proveedor estará inactivo.');
+            this.logger.warn('⚠️ Configuración de Postgres no proporcionada.');
             return;
         }
 
-        // Instanciamos el Pool de conexiones
         this.pool = new Pool({
             host: pgConfig.host,
             port: pgConfig.port,
             user: pgConfig.username,
             password: pgConfig.password,
             database: pgConfig.database,
-            // Soporte para conexiones SSL (necesario en AWS RDS, Supabase, Neon, etc.)
             ssl: pgConfig.ssl ? { rejectUnauthorized: false } : false,
-            // Evita que las conexiones inactivas se queden colgadas infinitamente
             idleTimeoutMillis: 30000,
         });
-        const tableCheck = await this.pool.query(`
-            SELECT EXISTS (
-                SELECT FROM information_schema.tables 
-                WHERE table_name = 'outbox_entries'
-            );
-        `);
 
-        if (tableCheck.rows[0].exists) {
-            this.logger.log('📊 Tabla [outbox_entries] verificada en la base de datos.');
-        } else {
-            this.logger.error('❌ La tabla [outbox_entries] no existe en la base de datos actual .');
-        }
-
-        // Capturamos errores a nivel de Pool (ej. el servidor de BD se reinicia)
-        this.pool.on('error', (err) => {
-            this.logger.error(`❌ Error inesperado en el pool de Postgres: ${err.message}`, err.stack);
-        });
-
+        // Verificación de conexión rápida
+        await this.pool.query('SELECT 1');
         this.logger.log('✅ Pool de conexiones de Postgres inicializado.');
     }
-
     async checkHealth(): Promise<{ status: 'up' | 'down'; latency?: number; message?: string }> {
         if (!this.pool) return { status: 'down', message: 'Pool de Postgres no inicializado' };
 

@@ -50,6 +50,7 @@
     "@nestjs/platform-express": "^11.1.26",
     "@nestjs/testing": "^11.1.26",
     "axios": "^1.17.0",
+    "dayjs": "^1.11.21",
     "googleapis": "^173.0.0",
     "nanoid": "^5.1.11",
     "pg": "^8.21.0",
