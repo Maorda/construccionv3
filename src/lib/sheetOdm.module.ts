@@ -24,6 +24,7 @@ import { UowModule } from './core/uow/uow.module';
 // Diagnósticos (Observabilidad)
 import { OdmDiagnosticsService } from './core/diagnostic/odm-diagnostics.service';
 import { OdmDiagnosticsController } from './core/diagnostic/odm-diagnostics.controller';
+import { SheetsRepositoryFactory } from './core/repository/sheets-repository.factory';
 
 @Global()
 @Module({})
@@ -56,6 +57,7 @@ export class SheetOdmModule {
           provide: POSTGRES_TOKEN,
           useExisting: PostgresProvider,
         },
+        SheetsRepositoryFactory,
 
         GasService,
         GoogleSheetProvider,
@@ -70,7 +72,8 @@ export class SheetOdmModule {
         DataSourceManager,
         MetadataRegistry,
         OutboxModule,
-        OdmDiagnosticsService // Lo exportamos por si quieren inyectar el servicio directamente
+        OdmDiagnosticsService, // Lo exportamos por si quieren inyectar el servicio directamente
+        SheetsRepositoryFactory
       ],
     };
   }
@@ -118,6 +121,7 @@ export class SheetOdmModule {
         GoogleHealthService,
         MetadataRegistry,
         OdmDiagnosticsService, // 🔥 Registrado aquí como proveedor de datos
+        SheetsRepositoryFactory
       ],
       exports: [
         UowModule,
@@ -126,8 +130,42 @@ export class SheetOdmModule {
         DataSourceManager,
         MetadataRegistry,
         OutboxModule,
-        OdmDiagnosticsService
+        OdmDiagnosticsService,
+        SheetsRepositoryFactory
       ],
+    };
+  }
+  static forFeature(entities: Function[]): DynamicModule {
+    const providers: Provider[] = entities.flatMap((entity) => {
+
+      // 1. Creamos un token único para el repositorio privado de esta entidad
+      const repositoryToken = `SheetsRepository_${entity.name}`;
+
+      const repositoryProvider: Provider = {
+        provide: repositoryToken,
+        useFactory: (metadata, dataSource, uow, hydrator) => {
+          return new SheetsRepository(entity as any, metadata, dataSource, uow, hydrator);
+        },
+        inject: [MetadataRegistry, DataSourceManager, UnitOfWork, SheetDocumentHydrator],
+      };
+
+      // 2. Creamos el proveedor del Modelo que usará el usuario final
+      const modelProvider: Provider = {
+        provide: `${entity.name}Model`, // Mapea directo con @InjectModel(Entity)
+        useFactory: (repo) => {
+          // Aquí llamamos a tu función mágica
+          return createModel(entity as any, repo);
+        },
+        inject: [repositoryToken], // Le pasamos su repositorio privado correspondiente
+      };
+
+      return [repositoryProvider, modelProvider];
+    });
+
+    return {
+      module: SheetOdmModule,
+      providers: providers,
+      exports: providers, // Se exportan para que el módulo de la funcionalidad los vea
     };
   }
 
