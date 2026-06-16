@@ -1,0 +1,3 @@
+export const PIPELINE_STAGE = Symbol('PIPELINE_STAGE');
+export const DATA_TRANSFORM_OPERATOR = Symbol('DATA_TRANSFORM_OPERATOR');
+export const FILTER_OPERATOR = Symbol('FILTER_OPERATOR');
