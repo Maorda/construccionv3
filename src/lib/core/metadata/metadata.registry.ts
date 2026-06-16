@@ -10,7 +10,7 @@ import {
     SHEETS_TABLE_NAME,
     SHEETS_VERSION_FIELD,
     SHEETS_VIRTUALS
-} from '../../shared/constants/metadata.constants';
+} from '../../shared/constants/constants';
 import { ColumnOptions, ReferenceOptions, SubCollectionOptions } from '../../core/metadata/interfaces';
 import { ClassType } from '../../core/types/common.types';
 

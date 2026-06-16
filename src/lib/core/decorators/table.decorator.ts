@@ -1,7 +1,8 @@
 import 'reflect-metadata';
 import { ClassType, TableOptions } from '../metadata/interfaces';
-import { SHEETS_DTO, SHEETS_TABLE_NAME } from '../../shared/constants/metadata.constants';
+
 import { MetadataRegistry } from '../metadata/metadata.registry';
+import { SHEETS_DTO, SHEETS_TABLE_NAME } from '../../shared/constants/constants';
 // --- DECORADOR @Table ---
 export function Table(options: TableOptions): ClassDecorator;
 export function Table(name: string, options: TableOptions): ClassDecorator;

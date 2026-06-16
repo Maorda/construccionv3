@@ -3,8 +3,21 @@ import { SheetDocument } from '../wrapper/sheet-document';
 import { SheetsRepository } from '../repository/sheets.repository';
 import { ROW_INDEX_SYMBOL } from '../../shared/constants/constants';
 import { ClassType } from '../types/common.types';
-
-
+export type UpdateQuery<T> = {
+    [P in keyof T]?: T[P];
+} & {
+    $set?: Partial<T>;
+    $inc?: { [P in keyof T]?: number }; // Más preciso que Record<keyof T, number>
+    $push?: { [key: string]: any };
+    $pull?: { [key: string]: any };
+    $unset?: { [P in keyof T]?: boolean | number | string };
+};
+export interface FindOneAndUpdateOptions<T extends object, U = any> extends QueryOptions<T> {
+    upsert?: boolean;
+    new?: boolean;
+    // Sobrescribimos con el tipo específico U si es necesario
+    customConstructor?: ConstructorSignature<T, U>;
+}
 export const InjectModel = (entity: Function) => Inject(`${entity.name}Model`);
 
 export interface QueryOptions<T = any> {

@@ -5,7 +5,7 @@ import timezone from 'dayjs/plugin/timezone.js';
 import customParseFormat from 'dayjs/plugin/customParseFormat.js';
 import weekOfYear from 'dayjs/plugin/weekOfYear.js';
 import { IExpressionOperator } from "./IExpressionOperator.js";
-import { DATA_TRANSFORM_OPERATOR, FILTER_OPERATOR } from "./pipeline.constants.js";
+import { DATA_TRANSFORM_OPERATOR, FILTER_OPERATOR } from "./pipeline.constants";
 
 dayjs.extend(utc);
 dayjs.extend(timezone);

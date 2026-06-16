@@ -2,22 +2,28 @@ import { Injectable, Logger } from "@nestjs/common";
 import { IQueryStage } from "./interfaces/query-stage.interface";
 import { StageUtils } from "./StageUtils";
 import { ExpressionEngine } from "./expression.engine";
-import { ROW_INDEX_SYMBOL } from "../shared/constants/constants.js";
+import { ROW_INDEX_SYMBOL } from "../shared/constants/constants";
 
 @Injectable()
 export class MatchStage implements IQueryStage {
     public readonly operator = '$match';
     private readonly logger = new Logger(MatchStage.name);
 
-    constructor(private readonly engine: ExpressionEngine) { }
 
-    public async execute(data: any[], filter: any): Promise<any[]> {
-        // La complejidad desapareció. El stage solo orquesta.
-        return data.filter(record => this.engine.evaluateFilter(record, filter));
+
+    async execute(data: any[], config: any): Promise<any[]> {
+        return data.filter((row) => {
+            return Object.entries(config).every(([key, expectedValue]) => {
+                // Validación de igualdad simple en memoria
+                return row[key] === expectedValue;
+            });
+        });
     }
 
-    public validate(config: any): void {
-        StageUtils.validateObject(config, '$match');
+    validate(config: any): void {
+        if (!config || typeof config !== 'object') {
+            throw new Error("La configuración del operador '$match' debe ser un objeto de criterios válido.");
+        }
     }
 }
 
@@ -44,6 +50,7 @@ export class ProjectStage implements IQueryStage {
         StageUtils.validateObject(config, '$project');
     }
 }
+@Injectable()
 export class AddFieldsStage implements IQueryStage {
     public readonly operator = '$addFields';
     private readonly logger = new Logger(AddFieldsStage.name);
