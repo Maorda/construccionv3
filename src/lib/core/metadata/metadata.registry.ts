@@ -14,7 +14,6 @@ import {
 import { ColumnOptions, ReferenceOptions, SubCollectionOptions } from '../../core/metadata/interfaces';
 import { ClassType } from '../../core/types/common.types';
 
-// 🔥 UNIÓN DISCRIMINADA: Para garantizar type-safety absoluto en el motor de persistencia
 export type CompiledRelation =
     | {
         propertyName: string;
@@ -24,7 +23,7 @@ export type CompiledRelation =
         joinColumn: string;
         required: boolean;
         onDelete: 'CASCADE' | 'SET_NULL' | 'RESTRICT';
-        rawOptions: ReferenceOptions; // Guardado para trazabilidad
+        rawOptions: ReferenceOptions;
     }
     | {
         propertyName: string;
@@ -35,7 +34,7 @@ export type CompiledRelation =
         localField?: string;
         cascadeDelete: boolean;
         onDelete: 'CASCADE' | 'SET_NULL' | 'RESTRICT';
-        rawOptions: SubCollectionOptions; // Guardado para trazabilidad
+        rawOptions: SubCollectionOptions;
     };
 
 export interface EntitySchema {
@@ -46,24 +45,49 @@ export interface EntitySchema {
     columnList: string[];
     deleteControl: string | null;
     versionField: string | null;
-    relations: Record<string, CompiledRelation>; // 🔥 Cambiado de string[] a Record para acceso O(1)
+    relations: Record<string, CompiledRelation>;
     virtuals: any[];
+}
+
+// 🔥 OPTIMIZACIÓN CRÍTICA: Símbolo global inmutable para prevenir el "Asesino Silencioso" 
+// de múltiples instancias de la clase en librerías empaquetadas.
+const ODM_GLOBAL_REGISTRY_KEY = Symbol.for('sheetOdm.global_metadata_store');
+if (!globalThis[ODM_GLOBAL_REGISTRY_KEY]) {
+    globalThis[ODM_GLOBAL_REGISTRY_KEY] = new Set<ClassType<any>>();
 }
 
 @Injectable()
 export class MetadataRegistry {
+    private static entities: Set<Function> = new Set();
     private readonly logger = new Logger(MetadataRegistry.name);
-    private readonly schemaCache = new Map<Function, EntitySchema>();
-    private static readonly registeredEntitiesStore = new Set<ClassType<any>>();
 
-    /**
-     * Obtiene o compila el esquema de la entidad de forma segura
-     */
+    // Cachés a nivel de instancia
+    private readonly schemaCache = new Map<Function, EntitySchema>();
+
+    // 🔥 OPTIMIZACIÓN: Índices O(1) para búsquedas ultrarrápidas
+    private readonly nameIndex = new Map<string, ClassType<any>>();
+    private readonly sheetIndex = new Map<string, ClassType<any>>();
+
+    static register(target: ClassType<any>): void {
+        const store = globalThis[ODM_GLOBAL_REGISTRY_KEY] as Set<ClassType<any>>;
+        store.add(target);
+    }
+
+    static getAllRegisteredEntities(): ClassType<any>[] {
+        const store = globalThis[ODM_GLOBAL_REGISTRY_KEY] as Set<ClassType<any>>;
+        return Array.from(store);
+    }
+
+
     getSchema(entityClass: ClassType<any>): EntitySchema {
         let schema = this.schemaCache.get(entityClass);
         if (!schema) {
             schema = this.compileSchema(entityClass);
             this.schemaCache.set(entityClass, schema);
+
+            // Alimentar índices de búsqueda instantánea O(1) al compilar
+            this.nameIndex.set(entityClass.name, entityClass);
+            this.sheetIndex.set(schema.sheetName, entityClass);
         }
         return schema;
     }
@@ -91,12 +115,10 @@ export class MetadataRegistry {
         return this.getSchema(entityClass).deleteControl;
     }
 
-    // 🔥 REFACTOR: Devuelve las llaves de las relaciones para mantener compatibilidad
     getRelationsList<T extends object>(entityClass: ClassType<T>): string[] {
         return Object.keys(this.getSchema(entityClass).relations);
     }
 
-    // 🔥 NUEVO: Devuelve los objetos de relación completos listos para el PersistenceEngine
     getCompiledRelations<T extends object>(entityClass: ClassType<T>): CompiledRelation[] {
         return Object.values(this.getSchema(entityClass).relations);
     }
@@ -134,35 +156,35 @@ export class MetadataRegistry {
         return undefined;
     }
 
-    // 🔥 OPTIMIZACIÓN: Ya no consulta Reflect en caliente, va directo a la caché compilada
     getRelationOptions(entityClass: ClassType<any>, relationName: string): CompiledRelation | undefined {
         return this.getSchema(entityClass).relations[relationName];
     }
 
+    // 🔥 OPTIMIZACIÓN: Búsqueda O(1) usando el índice precompilado
     getEntityBySheetName(sheetName: string): ClassType<any> | undefined {
         const targetSheetName = sheetName.toUpperCase();
-        for (const entity of MetadataRegistry.getAllRegisteredEntities()) {
-            if (this.getSchema(entity).sheetName === targetSheetName) {
-                return entity;
-            }
+
+        // Si no está en el índice, forzamos la compilación de todas las entidades
+        if (!this.sheetIndex.has(targetSheetName)) {
+            MetadataRegistry.getAllRegisteredEntities().forEach(e => this.getSchema(e));
         }
-        return undefined;
+
+        return this.sheetIndex.get(targetSheetName);
     }
 
-    static register(target: ClassType<any>): void {
-        this.registeredEntitiesStore.add(target);
+    // 🔥 OPTIMIZACIÓN: Búsqueda O(1)
+    getEntityByName(className: string): ClassType<any> | undefined {
+        if (!this.nameIndex.has(className)) {
+            MetadataRegistry.getAllRegisteredEntities().forEach(e => this.getSchema(e));
+        }
+        return this.nameIndex.get(className);
     }
 
-    static getAllRegisteredEntities(): ClassType<any>[] {
-        return Array.from(this.registeredEntitiesStore);
+    getColumnNamesForGas<T extends object>(entityClass: ClassType<T>): string[] {
+        const schema = this.getSchema(entityClass);
+        return schema.columnList.map(prop => schema.columns[prop]?.name || prop);
     }
 
-    /**
-     * Compilador robusto de esquemas con validaciones Fail-Fast
-     */
-    /**
-     * El compilador ahora normaliza basándose en el tipo de relación
-     */
     private compileSchema(entityClass: ClassType<any>): EntitySchema {
         const proto = entityClass.prototype;
         const primaryKeyProperty = Reflect.getMetadata(SHEETS_PRIMARY_KEY, entityClass) || 'id';
@@ -178,9 +200,7 @@ export class MetadataRegistry {
 
             if (!rawRel) continue;
 
-            // 🛠️ Mapeo condicional estricto según la estructura de tus decoradores
             if (rawRel.isMany) {
-                // Es un SubCollection
                 const subOptions: SubCollectionOptions = rawRel.options || { cascadeDelete: false };
                 compiledRelations[prop] = {
                     propertyName: prop,
@@ -194,7 +214,6 @@ export class MetadataRegistry {
                     rawOptions: subOptions
                 };
             } else {
-                // Es un Reference
                 compiledRelations[prop] = {
                     propertyName: prop,
                     isMany: false,
@@ -228,17 +247,10 @@ export class MetadataRegistry {
         };
     }
 
-    getColumnNamesForGas<T extends object>(entityClass: ClassType<T>): string[] {
-        const schema = this.getSchema(entityClass);
-        return schema.columnList.map(prop => schema.columns[prop]?.name || prop);
+    // ------------------ MÉTODOS DE REGISTRO ESTÁTICO ------------------
+    static registerEntity(entity: Function) {
+        this.entities.add(entity);
     }
 
-    getEntityByName(className: string): ClassType<any> | undefined {
-        for (const entity of MetadataRegistry.getAllRegisteredEntities()) {
-            if (entity.name === className) {
-                return entity;
-            }
-        }
-        return undefined;
-    }
+
 }

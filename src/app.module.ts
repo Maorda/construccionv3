@@ -1,9 +1,12 @@
 // src/app.module.ts
-import { Module } from '@nestjs/common';
+import { Logger, Module, OnApplicationBootstrap } from '@nestjs/common';
 import { AppService } from './app.service';
-import { SheetOdmModule } from '@sheetOdm/sheetOdm.module';
+import { SheetOdmModule } from './lib/sheetOdm.module';
 import { AppController } from './app.controller';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { ModuleRef } from '@nestjs/core';
+import { InfrastructureProvisioner } from './lib/infrastructure/InfrastructureProvisioner';
+import { TestInfrastructureModule } from './client/cliente.module';
 
 @Module({
     imports: [
@@ -42,6 +45,8 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
                 },
             }),
         }),
+        TestInfrastructureModule,
+
     ],
     controllers: [AppController],
     providers: [AppService],

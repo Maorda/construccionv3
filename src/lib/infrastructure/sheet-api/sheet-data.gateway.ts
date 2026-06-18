@@ -19,6 +19,7 @@ export interface ISheetWriteDriver {
     getExistingSheetTitles(): Promise<string[]>;
     getRange(range: string): Promise<any[][]>;
     getRowData(sheetName: string, rowNumber: number): Promise<any[]>;
+    getBoundaries(sheetName: string): Promise<{ lastRow: number; lastColumn: number }>;
 }
 
 @Injectable()
@@ -200,6 +201,34 @@ export class SheetDataGateway implements ISheetWriteDriver {
             this.logger.log(`[Gateway] 🧼 Batch Clear ejecutado para ${ranges.length} rangos.`);
         } catch (error: any) {
             this.logger.error(`Error en batchClearValues: ${error.message}`);
+            throw error;
+        }
+    }
+    async getBoundaries(sheetName: string): Promise<{ lastRow: number; lastColumn: number }> {
+        try {
+            // Al omitir el rango (ej. '!A1:Z') y enviar solo el nombre,
+            // la API recorta el viewport a los datos útiles.
+            const res = await this.auth.sheets.spreadsheets.values.get({
+                spreadsheetId: this.spreadsheetId,
+                range: sheetName,
+                valueInputOption: 'RAW',
+            });
+
+            const values = res.data.values;
+
+            // Si la hoja está completamente vacía
+            if (!values || values.length === 0) {
+                return { lastRow: 0, lastColumn: 0 };
+            }
+
+            const lastRow = values.length;
+            // Para la columna, buscamos la fila más ancha de toda la matriz
+            const lastColumn = Math.max(...values.map(row => row.length));
+
+            this.logger.debug(`[Boundaries] ${sheetName} -> Fila: ${lastRow}, Columna: ${lastColumn}`);
+            return { lastRow, lastColumn };
+        } catch (error: any) {
+            this.logger.error(`Error obteniendo límites de ${sheetName}: ${error.message}`);
             throw error;
         }
     }

@@ -1,4 +1,4 @@
-import { Module, DynamicModule, Global, Provider } from '@nestjs/common';
+import { Module, DynamicModule, Global, Provider, OnApplicationBootstrap, Logger } from '@nestjs/common';
 import { SheetDataTransformer } from './core/base/sheetDataTransformer'; // 💡 Ajusta la ruta real de tu archivo
 import { HttpModule } from '@nestjs/axios';
 import { APP_INTERCEPTOR } from '@nestjs/core';
@@ -44,11 +44,28 @@ import { UnitOfWork } from './core/uow/services/unit-of-work.service';
 import { createModel } from './core/model/model.factory';
 import { AggregateOperator, ConcatOperator, DateAddOperator, IfOperator, IncOperator, MathOperator, MinMaxOperator, MultiplyOperator, RoundOperator, TimeDiffOperator, TrimOperator, UpperOperator } from './stages/transform.operators';
 import { EqOperator, GtOperator } from './stages/filter.operators';
+import { InfrastructureProvisioner } from './infrastructure/InfrastructureProvisioner';
 
 @Global()
 @Module({})
-export class SheetOdmModule {
+export class SheetOdmModule implements OnApplicationBootstrap {
+  private readonly logger = new Logger('SheetOdm');
 
+  // Inyectamos el provisioner directamente, NestJS se encarga de resolverlo
+  constructor(private readonly provisioner: InfrastructureProvisioner) { }
+
+  async onApplicationBootstrap() {
+    // Mantenemos la lógica de entorno para no bloquear pruebas
+    if (process.env.NODE_ENV === 'test') {
+      return;
+    }
+
+    this.logger.log('--- 🚀 [SheetODM] Iniciando sincronización de infraestructura ---');
+
+    this.provisioner.syncSchema()
+      .then(() => this.logger.log('✅ [SheetODM] Infraestructura lista.'))
+      .catch(err => this.logger.error('❌ [SheetODM] Error de inicialización:', err.message));
+  }
   /**
    * Registra los operadores de transformación y filtrado requeridos por el ExpressionEngine
    */
@@ -235,9 +252,12 @@ export class SheetOdmModule {
           inject: options.inject,
           imports: options.imports,
         })
+
       ],
       controllers: [OdmDiagnosticsController],
       providers: [
+        InfrastructureProvisioner,
+        MetadataRegistry,
         ...this.createAsyncProviders(options),
         { provide: APP_INTERCEPTOR, useClass: GasTelemetryInterceptor },
 
@@ -254,7 +274,7 @@ export class SheetOdmModule {
         GasQueryGateway,
         DataSourceManager,
         GoogleHealthService,
-        MetadataRegistry,
+
         OdmDiagnosticsService,
         SheetsRepositoryFactory,
 
@@ -266,7 +286,11 @@ export class SheetOdmModule {
         QueryEngine,
         MutationEngine,
         SheetDocumentHydrator,
-        SheetDataTransformer
+        SheetDataTransformer,
+
+        // --- AGREGAR AL FINAL DE PROVIDERS ---
+        // 👈 Tu clase de sincronización
+
       ],
       exports: [
         UowModule,
@@ -279,14 +303,22 @@ export class SheetOdmModule {
         SheetsRepositoryFactory,
         ExpressionEngine,
         QueryEngine,
-        MutationEngine
+        MutationEngine,
+        InfrastructureProvisioner,
       ],
     };
   }
 
   static forFeature(entities: Function[]): DynamicModule {
+    // 1. REGISTRO INMEDIATO: Esto ocurre al cargar el módulo, antes del bootstrap
+    entities.forEach((entity) => {
+      MetadataRegistry.register(entity as any);
+    });
+
+    // 2. CREACIÓN DE PROVIDERS
     const providers: Provider[] = entities.flatMap((entity) => {
       const repositoryToken = `SheetsRepository_${entity.name}`;
+
       const repositoryProvider: Provider = {
         provide: repositoryToken,
         useFactory: (
@@ -299,7 +331,16 @@ export class SheetOdmModule {
           gasService: GasService,
           gateway: SheetDataGateway
         ) => new SheetsRepository(entity as any, metadata, dataSource, uow, hydrator, queryEngine, mutationEngine, gasService, gateway),
-        inject: [MetadataRegistry, DataSourceManager, UnitOfWork, SheetDocumentHydrator, QueryEngine, MutationEngine, GasService, SheetDataGateway],
+        inject: [
+          MetadataRegistry,
+          DataSourceManager,
+          UnitOfWork,
+          SheetDocumentHydrator,
+          QueryEngine,
+          MutationEngine,
+          GasService,
+          SheetDataGateway
+        ],
       };
 
       const modelProvider: Provider = {

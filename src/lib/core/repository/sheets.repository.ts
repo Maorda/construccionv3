@@ -38,10 +38,14 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
      * 🔍 BÚSQUEDA ÚNICA
      */
     async findOne(filter?: FilterQuery<T>, options?: QueryOptions<T>): Promise<U | null> {
-        // 1. Usamos el mismo helper de ruta rápida que 'find'
         if (this.canUseGasFastRoute(filter, options)) {
-            const columnName = Object.keys(filter!)[0];
-            const searchValue = String(filter![columnName]);
+            const propertyName = Object.keys(filter!)[0];
+            const searchValue = String(filter![propertyName as keyof FilterQuery<T>]);
+
+            // 🚀 PARCHE 1: Traducir nombre de propiedad a nombre de Cabecera (Sheet Header)
+            const schema = this.metadataRegistry.getSchema(this.entityClass);
+            const colConfig = schema.columns[propertyName];
+            const columnName = (colConfig?.name || propertyName).toUpperCase();
 
             try {
                 const rawData = await this.gasService.findOne<any>(this.sheetName, columnName, searchValue);
@@ -56,7 +60,6 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
             }
         }
 
-        // 2. Ruta Lenta (Fallback)
         const results = await this.find(filter, { ...options, limit: 1 });
         return results.length > 0 ? (results[0] as U) : null;
     }
@@ -65,21 +68,21 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
      * 🔍 BÚSQUEDA MÚLTIPLE
      */
     async find(filter?: FilterQuery<T>, options?: QueryOptions<T>): Promise<U[]> {
-        // 1. Sanitizamos el filtro: si es undefined, lo convertimos en un objeto vacío.
-        // Esto elimina las quejas de TypeScript y previene errores en el QueryEngine.
         const safeFilter = filter || ({} as FilterQuery<T>);
 
-        // 🚀 CARRIL RÁPIDO
         if (this.canUseGasFastRoute(safeFilter, options)) {
-            // Ya no necesitas usar "!" porque safeFilter garantiza ser un objeto
-            const columnName = Object.keys(safeFilter)[0];
-            const searchValue = String(safeFilter[columnName as keyof FilterQuery<T>]);
+            const propertyName = Object.keys(safeFilter)[0];
+            const searchValue = String(safeFilter[propertyName as keyof FilterQuery<T>]);
+
+            // 🚀 PARCHE 1: Traducción a cabecera real
+            const schema = this.metadataRegistry.getSchema(this.entityClass);
+            const colConfig = schema.columns[propertyName];
+            const columnName = (colConfig?.name || propertyName).toUpperCase();
 
             try {
                 const rawArray = await this.gasService.findMany<any>(this.sheetName, columnName, searchValue);
 
                 if (rawArray && rawArray.length > 0) {
-                    // Usamos safeFilter aquí
                     const processedItems = await this.queryEngine.execute(rawArray, safeFilter, options);
                     return processedItems.map(raw => this.hydrateAndCacheRawResult<U>(raw, options));
                 }
@@ -89,10 +92,7 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
             }
         }
 
-        // 🐢 CARRIL LENTO
         const rawItems = await this.fetchRawData(options?.includeInactive);
-
-        // Usamos safeFilter aquí también
         const processedItems = await this.queryEngine.execute(rawItems, safeFilter, options);
 
         return processedItems.map(raw => this.hydrateAndCacheRawResult<U>(raw, options));
@@ -145,10 +145,15 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
      */
     async save(doc: U): Promise<U> {
         const pk = (doc as any)[this.getPrimaryKeyField()];
-        const isNew = (doc as any)[ROW_INDEX_SYMBOL] === undefined;
+        const rowIndex = (doc as any)[ROW_INDEX_SYMBOL];
+        const isNew = rowIndex === undefined;
         const operation: TypeOp = isNew ? TypeOp.INSERT : TypeOp.UPDATE;
 
+        // 🚀 PARCHE 2: Asegurar que la meta-información crítica sobreviva al toJSON
         const payload = doc.toJSON();
+        if (!isNew) {
+            payload._row = rowIndex; // Adjuntamos explícitamente el índice para el motor de mutación
+        }
 
         if (this.uow.hasActiveTransaction()) {
             this.logger.debug(`[Repository] Encolando operación ${operation} en UoW para ${this.sheetName}`);
@@ -258,7 +263,10 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
     }
 
     protected async fetchRawData(includeInactive = false): Promise<any[]> {
-        const allRows = await this.gateway.getRange(`${this.sheetName}!A1:Z10000`);
+        const bounds = await this.gateway.getBoundaries(this.sheetName);
+        const colLetter = String.fromCharCode(64 + bounds.lastColumn);
+        const perfectRange = `${this.sheetName}!A1:${colLetter}${bounds.lastRow}`;
+        const allRows = await this.gateway.getRange(perfectRange);
         if (!allRows || allRows.length === 0) return [];
 
         const headers = allRows[0].map((h: any) => String(h).trim().toUpperCase());
