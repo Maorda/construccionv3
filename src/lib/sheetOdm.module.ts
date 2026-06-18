@@ -46,20 +46,45 @@ import { AggregateOperator, ConcatOperator, DateAddOperator, IfOperator, IncOper
 import { EqOperator, GtOperator } from './stages/filter.operators';
 import { InfrastructureProvisioner } from './infrastructure/InfrastructureProvisioner';
 
+
+const CORE_SHARED_SERVICES: Provider[] = [
+  DataSourceManager,
+  MetadataRegistry,
+  OdmDiagnosticsService,
+  SheetsRepositoryFactory,
+  ExpressionEngine,
+  QueryEngine,
+  MutationEngine,
+  SheetDocumentHydrator,
+  GasService,
+  SheetDataGateway,
+  InfrastructureProvisioner,
+];
+
+// Servicios de uso estrictamente interno (No necesitan ser exportados)
+const INTERNAL_SERVICES: Provider[] = [
+  GoogleSheetProvider,
+  GasQueryGateway,
+  GoogleHealthService,
+  SheetDataTransformer,
+  { provide: APP_INTERCEPTOR, useClass: GasTelemetryInterceptor },
+];
 @Global()
 @Module({})
 export class SheetOdmModule implements OnApplicationBootstrap {
   private readonly logger = new Logger('SheetOdm');
 
-  // Inyectamos el provisioner directamente, NestJS se encarga de resolverlo
+  // Candado para evitar que el bootstrap se ejecute múltiples veces por los módulos dinámicos
+  private static hasBootstrapped = false;
+
   constructor(private readonly provisioner: InfrastructureProvisioner) { }
 
   async onApplicationBootstrap() {
-    // Mantenemos la lógica de entorno para no bloquear pruebas
-    if (process.env.NODE_ENV === 'test') {
+    if (process.env.NODE_ENV === 'test' || SheetOdmModule.hasBootstrapped) {
       return;
     }
 
+    SheetOdmModule.hasBootstrapped = true; // Bloqueamos ejecuciones futuras
     this.logger.log('--- 🚀 [SheetODM] Iniciando sincronización de infraestructura ---');
 
     this.provisioner.syncSchema()
@@ -182,60 +207,6 @@ export class SheetOdmModule implements OnApplicationBootstrap {
     ];
   }
 
-  static forRoot(options: SheetOdmModuleOptions): DynamicModule {
-    return {
-      module: SheetOdmModule,
-      imports: [HttpModule, UowModule, OutboxModule.register(options)],
-      controllers: [OdmDiagnosticsController],
-      providers: [
-        { provide: APP_INTERCEPTOR, useClass: GasTelemetryInterceptor },
-        { provide: SHEET_ODM_OPTIONS, useValue: options },
-        { provide: 'DATABASE_OPTIONS', useValue: options },
-
-        {
-          provide: PostgresProvider,
-          useFactory: (opts: SheetOdmModuleOptions) => new PostgresProvider(opts),
-          inject: [SHEET_ODM_OPTIONS],
-        },
-        { provide: POSTGRES_TOKEN, useExisting: PostgresProvider },
-
-        SheetsRepositoryFactory,
-        GasService,
-        GoogleSheetProvider,
-        SheetDataGateway,
-        GasQueryGateway,
-        DataSourceManager,
-        GoogleHealthService,
-        MetadataRegistry,
-        OdmDiagnosticsService,
-
-        // Infraestructura del Motor de Expresiones y Filtros Avanzados
-        ...this.createExpressionOperatorsProviders(), // ✅ Solución al error implícito de ExpressionEngine
-        ExpressionEngine,                             // ✅ Provee la instancia para ProjectStage, MatchStage, etc.
-
-        // Stages del Pipeline
-        ...this.createStageProviders(),
-        QueryEngine,
-        MutationEngine,
-        SheetDocumentHydrator,
-        SheetDataTransformer
-      ],
-      exports: [
-        PostgresProvider,
-        POSTGRES_TOKEN,
-        DataSourceManager,
-        MetadataRegistry,
-        OutboxModule,
-        UowModule,
-        OdmDiagnosticsService,
-        SheetsRepositoryFactory,
-        ExpressionEngine,
-        QueryEngine,
-        MutationEngine
-      ],
-    };
-  }
-
   static forRootAsync(options: SheetOdmModuleAsyncOptions): DynamicModule {
     if (!options.useFactory) {
       throw new Error('El método [useFactory] es requerido en forRootAsync para SheetOdmModule.');
@@ -251,16 +222,14 @@ export class SheetOdmModule implements OnApplicationBootstrap {
           useFactory: options.useFactory,
           inject: options.inject,
           imports: options.imports,
-        })
-
+        }),
       ],
       controllers: [OdmDiagnosticsController],
       providers: [
-        InfrastructureProvisioner,
-        MetadataRegistry,
+        // 1. Opciones Async
         ...this.createAsyncProviders(options),
-        { provide: APP_INTERCEPTOR, useClass: GasTelemetryInterceptor },
 
+        // 2. Postgres
         {
           provide: PostgresProvider,
           useFactory: (opts: SheetOdmModuleOptions) => new PostgresProvider(opts),
@@ -268,54 +237,34 @@ export class SheetOdmModule implements OnApplicationBootstrap {
         },
         { provide: POSTGRES_TOKEN, useExisting: PostgresProvider },
 
-        GasService,
-        GoogleSheetProvider,
-        SheetDataGateway,
-        GasQueryGateway,
-        DataSourceManager,
-        GoogleHealthService,
+        // 3. Constantes Limpias
+        ...INTERNAL_SERVICES,
+        ...CORE_SHARED_SERVICES,
 
-        OdmDiagnosticsService,
-        SheetsRepositoryFactory,
-
-        // Infraestructura del Motor de Expresiones en Async
-        ...this.createExpressionOperatorsProviders(), // ✅ Solución al error implícito en Async
-        ExpressionEngine,                             // ✅ Provee la instancia para ProjectStage en Async
-
+        // 4. Expresiones y Stages
+        ...this.createExpressionOperatorsProviders(),
         ...this.createStageProviders(),
-        QueryEngine,
-        MutationEngine,
-        SheetDocumentHydrator,
-        SheetDataTransformer,
-
-        // --- AGREGAR AL FINAL DE PROVIDERS ---
-        // 👈 Tu clase de sincronización
-
       ],
       exports: [
+        // Exportamos Módulos
         UowModule,
+        OutboxModule,
+
+        // Exportamos Postgres Tokens
         PostgresProvider,
         POSTGRES_TOKEN,
-        DataSourceManager,
-        MetadataRegistry,
-        OutboxModule,
-        OdmDiagnosticsService,
-        SheetsRepositoryFactory,
-        ExpressionEngine,
-        QueryEngine,
-        MutationEngine,
-        InfrastructureProvisioner,
+
+        // Exportamos los servicios compartidos dinámicamente
+        ...CORE_SHARED_SERVICES,
       ],
     };
   }
 
   static forFeature(entities: Function[]): DynamicModule {
-    // 1. REGISTRO INMEDIATO: Esto ocurre al cargar el módulo, antes del bootstrap
     entities.forEach((entity) => {
       MetadataRegistry.register(entity as any);
     });
 
-    // 2. CREACIÓN DE PROVIDERS
     const providers: Provider[] = entities.flatMap((entity) => {
       const repositoryToken = `SheetsRepository_${entity.name}`;
 
@@ -355,7 +304,7 @@ export class SheetOdmModule implements OnApplicationBootstrap {
     return {
       module: SheetOdmModule,
       providers: providers,
-      exports: providers,
+      exports: providers, // Los repositorios creados se auto-exportan
     };
   }
 

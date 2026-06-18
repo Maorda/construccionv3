@@ -71,6 +71,7 @@ export class MetadataRegistry {
     static register(target: ClassType<any>): void {
         const store = globalThis[ODM_GLOBAL_REGISTRY_KEY] as Set<ClassType<any>>;
         store.add(target);
+        console.log(`🔍 [MetadataRegistry] Entidad registrada: ${target.name}. Total: ${this.entities.size}`);
     }
 
     static getAllRegisteredEntities(): ClassType<any>[] {

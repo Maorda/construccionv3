@@ -7,6 +7,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ModuleRef } from '@nestjs/core';
 import { InfrastructureProvisioner } from './lib/infrastructure/InfrastructureProvisioner';
 import { TestInfrastructureModule } from './client/cliente.module';
+import { OutboxModule } from '@sheetOdm/core/outbox/outbox.module';
 
 @Module({
     imports: [
@@ -46,6 +47,7 @@ import { TestInfrastructureModule } from './client/cliente.module';
             }),
         }),
         TestInfrastructureModule,
+        OutboxModule
 
     ],
     controllers: [AppController],
