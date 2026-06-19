@@ -278,8 +278,9 @@ export class SheetOdmModule implements OnApplicationBootstrap {
           queryEngine: QueryEngine,
           mutationEngine: MutationEngine,
           gasService: GasService,
-          gateway: SheetDataGateway
-        ) => new SheetsRepository(entity as any, metadata, dataSource, uow, hydrator, queryEngine, mutationEngine, gasService, gateway),
+          gateway: SheetDataGateway,
+          transformer: SheetDataTransformer
+        ) => new SheetsRepository(entity as any, metadata, dataSource, uow, hydrator, queryEngine, mutationEngine, gasService, gateway, transformer),
         inject: [
           MetadataRegistry,
           DataSourceManager,
@@ -288,7 +289,8 @@ export class SheetOdmModule implements OnApplicationBootstrap {
           QueryEngine,
           MutationEngine,
           GasService,
-          SheetDataGateway
+          SheetDataGateway,
+          SheetDataTransformer
         ],
       };
 
@@ -298,7 +300,7 @@ export class SheetOdmModule implements OnApplicationBootstrap {
         inject: [repositoryToken],
       };
 
-      return [repositoryProvider, modelProvider];
+      return [repositoryProvider, modelProvider, SheetDataTransformer];
     });
 
     return {

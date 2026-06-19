@@ -35,7 +35,8 @@ import { OutboxModule } from '@sheetOdm/core/outbox/outbox.module';
                 checkConnectionOnBoot: true,
                 timezone: config.get<string>('TIMEZONE') || 'UTC',
                 formatDates: config.get<boolean>('FORMAT_DATES') || false, // ✅ Corregido a camelCase
-                outboxPollingInterval: 10000,
+                outboxPollingInterval: 10000, // Cada 10 segundos busca tareas
+                outboxRetentionInterval: '2 hours', // ✅¡Configuración dinámica! Puede ser '30 minutes', '12 hours', '2 days', tiempo que se quedan en la tabla outbox-entries
                 postgres: {
                     host: config.get<string>('DB_HOST')!,
                     port: config.get<number>('DB_PORT') || 6543,

@@ -23,6 +23,9 @@ export const CONNECTION_STABILITY = {
 };
 
 export interface SheetOdmModuleOptions {
+
+    // Nueva propiedad: Acepta formatos nativos de Postgres como '2 hours', '1 day', '30 minutes'
+    outboxRetentionInterval?: string;
     /** Configuración completa del Service Account de Google (JSON) */
     googleDriveConfig: GoogleDriveConfig;
 

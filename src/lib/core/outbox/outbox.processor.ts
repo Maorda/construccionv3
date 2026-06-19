@@ -22,9 +22,24 @@ export class OutboxProcessor implements OnApplicationBootstrap, OnApplicationShu
         private readonly metadataRegistry: MetadataRegistry,
     ) { }
 
-    onApplicationBootstrap() {
+    async onApplicationBootstrap() {
         this.logger.log('🚀 Outbox Processor inicializado (Modo Resiliente Avanzado).');
+
+        // 🔥 SOLUCIÓN 1: Auto-provisionamiento del índice sin tocar la BD a mano
+        await this.ensureDatabaseIndices();
+
         this.scheduleNextTick();
+    }
+    private async ensureDatabaseIndices() {
+        try {
+            await this.pg.query(`
+                CREATE INDEX IF NOT EXISTS idx_outbox_entries_purge 
+                ON outbox_entries (status, finished_at);
+            `);
+            this.logger.log('⚡ [Infraestructura SQL] Índice de optimización de purga verificado/creado exitosamente.');
+        } catch (error: any) {
+            this.logger.error(`❌ No se pudo auto-provisionar el índice en Postgres: ${error.message}`);
+        }
     }
 
     onApplicationShutdown() {
@@ -184,17 +199,22 @@ export class OutboxProcessor implements OnApplicationBootstrap, OnApplicationShu
     // 🔥 MEJORA: Eliminación automática de registros viejos procesados con éxito
     private async purgeOldCompletedTasks() {
         try {
-            // Borra registros que lleven más de 24 horas completados con éxito
+            // Si el usuario no define un tiempo, aplicamos un default seguro de '2 hours'
+            const retentionInterval = this.options.outboxRetentionInterval || '2 hours';
+
+            // Usamos ($2::INTERVAL) para pasar de forma segura el string de tiempo parametrizado
             const result = await this.pg.query(
                 `DELETE FROM outbox_entries 
-                 WHERE status = $1 AND finished_at < NOW() - INTERVAL '1 day'`,
-                [OutboxStatus.COMPLETED]
+                 WHERE status = $1 
+                   AND finished_at < CURRENT_TIMESTAMP - ($2::INTERVAL)`,
+                [OutboxStatus.COMPLETED, retentionInterval]
             );
+
             if (result.rowCount && result.rowCount > 0) {
-                this.logger.log(`🧹 [Mantenimiento] Se eliminaron ${result.rowCount} registros antiguos de la Outbox.`);
+                this.logger.log(`🧹 [Mantenimiento] Se eliminaron ${result.rowCount} registros antiguos de la Outbox (Retención: ${retentionInterval}).`);
             }
-        } catch (error) {
-            this.logger.error('❌ Error al ejecutar el mantenimiento de la Outbox', error);
+        } catch (error: any) {
+            this.logger.error('❌ Error al ejecutar el mantenimiento dinámico de la Outbox', error.message);
         }
     }
 
