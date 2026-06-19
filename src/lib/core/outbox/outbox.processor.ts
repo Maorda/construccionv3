@@ -95,18 +95,18 @@ export class OutboxProcessor implements OnApplicationBootstrap, OnApplicationShu
 
     private async processGroup(entityName: string, tasks: any[]) {
         const entityClass = this.metadataRegistry.getEntityByName(entityName);
-
         if (!entityClass) {
-            this.logger.error(`❌ Entidad no registrada: ${entityName}. No se puede obtener el repositorio.`);
+            this.logger.error(`❌ Entidad no registrada: ${entityName}.`);
             await this.markAs(tasks, OutboxStatus.FAILED, `Entidad no encontrada: ${entityName}`);
             return;
         }
+
+        const repoToken = getRepositoryToken(entityClass);
         let repo: any;
         try {
-            const repoToken = getRepositoryToken(entityClass);
-            repo = this.moduleRef.get(repoToken, { strict: false });
+            repo = await this.moduleRef.resolve(repoToken, undefined, { strict: false });
         } catch (err: any) {
-            this.logger.error(`❌ Fallo de inyección para la entidad: ${entityName}`);
+            this.logger.error(`❌ No se pudo resolver el repositorio para ${entityName}: ${err.message}`);
             await this.markAs(tasks, OutboxStatus.FAILED, err.message);
             return;
         }
@@ -114,7 +114,18 @@ export class OutboxProcessor implements OnApplicationBootstrap, OnApplicationShu
         const startTime = Date.now();
 
         try {
-            const documents = tasks.map(t => t.payload || t.doc);
+            const documents = tasks.map(t => {
+                const rawData = t.payload || t.doc;
+                // Usamos repo.create para instanciar el documento correctamente
+                const doc = repo.create(rawData);
+
+                // Si el objeto tenía un índice de fila (porque viene de un UPDATE/DELETE), 
+                // asegúrate de que el documento lo reciba.
+                if (rawData._row !== undefined) {
+                    doc.markAsSaved(rawData._row);
+                }
+                return doc;
+            });
             await repo.commitBulk(documents);
 
             const duration = Date.now() - startTime;

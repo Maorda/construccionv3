@@ -13,6 +13,7 @@ import { QueryEngine } from '../query/query.engine';
 import { MutationEngine } from '../engine/mutationEngine';
 import { GasService } from '../../infrastructure/gas/gas.service';
 import { SheetDataGateway } from '../../infrastructure/sheet-api/sheet-data.gateway';
+import { SheetDataTransformer } from '../base/sheetDataTransformer';
 
 export class SheetsRepository<T extends object, U extends SheetDocument<T> = SheetDocument<T>> {
     private readonly logger: Logger;
@@ -28,7 +29,8 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
         private readonly queryEngine: QueryEngine,
         private readonly mutationEngine: MutationEngine,
         private readonly gasService: GasService,
-        private readonly gateway: SheetDataGateway
+        private readonly gateway: SheetDataGateway,
+        private readonly transformer: SheetDataTransformer,
     ) {
         this.logger = new Logger(`Repository<${this.entityClass.name}>`);
         this.sheetName = this.metadataRegistry.getSchema(this.entityClass).sheetName;
@@ -306,5 +308,89 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
 
     private getPrimaryKeyField(): string {
         return this.metadataRegistry.getPrimaryKeyField(this.entityClass);
+    }
+    async commitBulk(documents: any[]): Promise<void> {
+        if (!documents || documents.length === 0) return;
+
+        // 1. Clasificación de operaciones
+        const inserts = documents.filter(doc => !doc[ROW_INDEX_SYMBOL]);
+        const updates = documents.filter(doc => doc[ROW_INDEX_SYMBOL] && !doc.deleted);
+        const deletes = documents.filter(doc => doc[ROW_INDEX_SYMBOL] && doc.deleted);
+
+        try {
+            // 2. Ejecución Secuencial (Respetando el orden lógico de escritura en Sheets)
+
+            // A. Borrados (Hard o Soft)
+            if (deletes.length > 0) {
+                await this.processDeletes(deletes);
+            }
+
+            // B. Actualizaciones
+            if (updates.length > 0) {
+                await this.processUpdates(updates);
+            }
+
+            // C. Inserciones
+            if (inserts.length > 0) {
+                await this.processInserts(inserts);
+            }
+
+            this.logger.debug(`[commitBulk] Lote procesado exitosamente: ${documents.length} registros.`);
+        } catch (error: any) {
+            this.logger.error(`[commitBulk] Fallo en la ejecución del lote: ${error.message}`);
+            throw error; // Propagamos para que el OutboxProcessor maneje el reintento
+        }
+    }
+
+    private async processDeletes(docs: any[]): Promise<void> {
+        const deleteControlProp = this.metadataRegistry.getDeleteControlProperty(this.entityClass);
+        const hardDeleteRanges: string[] = [];
+        const softDeleteUpdates: { range: string; values: any[][] }[] = [];
+
+        for (const doc of docs) {
+            const rowIndex = doc[ROW_INDEX_SYMBOL];
+            if (deleteControlProp) {
+                // Soft delete: Actualizar celda a true
+                doc[deleteControlProp] = true;
+                softDeleteUpdates.push({
+                    range: `${this.sheetName}!A${rowIndex}`,
+                    values: [this.prepareDataWithVersion(doc, doc.version + 1)]
+                });
+            } else {
+                // Hard delete: Limpiar fila
+                hardDeleteRanges.push(`${this.sheetName}!${rowIndex}:${rowIndex}`);
+            }
+        }
+
+        if (hardDeleteRanges.length > 0) await this.gateway.batchClearValues(hardDeleteRanges);
+        if (softDeleteUpdates.length > 0) await this.gateway.batchUpdateValues(softDeleteUpdates);
+    }
+
+    private async processUpdates(docs: any[]): Promise<void> {
+        const payloads = docs.map(doc => ({
+            range: `${this.sheetName}!A${doc[ROW_INDEX_SYMBOL]}`,
+            values: [this.prepareDataWithVersion(doc, doc.version + 1)]
+        }));
+        await this.gateway.batchUpdateValues(payloads);
+    }
+
+    private async processInserts(docs: any[]): Promise<void> {
+        const rows = docs.map(doc => this.prepareDataWithVersion(doc, 1));
+        await this.gateway.appendRows(this.sheetName, rows);
+    }
+    private prepareDataWithVersion(dataObject: any, newVersion: number): any[] {
+        const versionField = this.metadataRegistry.getVersionField(this.entityClass);
+        const schema = this.metadataRegistry.getSchema(this.entityClass);
+
+        return schema.columnList.map(columnName => {
+            if (columnName === versionField) return newVersion;
+
+            const rawValue = dataObject[columnName];
+            // Inferimos el tipo desde el decorador @Column de tu metadata
+            const colType = schema.columns[columnName]?.type || 'string';
+
+            // 🛡️ SERIALIZACIÓN SEGURA: Usamos tu transformer real
+            return this.transformer.prepareValueForSheet(rawValue, colType);
+        });
     }
 }

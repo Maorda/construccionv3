@@ -89,10 +89,10 @@ export function createModel<T extends object>(
     // 1. Definimos la clase que servirá de contenedor (instancias)
     class ModelClass {
         constructor(data: Partial<T> = {}) {
-            const _data = { ...data };
+            const _data = { ...data } as any;
             const _modifiedPaths = new Set<string>();
-            let _isNew = (_data as any)[ROW_INDEX_SYMBOL] === undefined;
-            let _version = (_data as any).version || 0;
+            let _isNew = _data[ROW_INDEX_SYMBOL] === undefined;
+            let _version = _data.version || 0;
 
             const instance = Object.assign(Object.create(entityClass.prototype), _data);
 
@@ -100,12 +100,14 @@ export function createModel<T extends object>(
                 get(target, prop, receiver) {
                     if (prop === '_data') return _data;
                     if (prop === '_isNew') return _isNew;
+                    // Permitir que el proxy resuelva el símbolo de la fila
+                    if (prop === ROW_INDEX_SYMBOL) return _data[ROW_INDEX_SYMBOL];
                     return Reflect.get(target, prop, receiver);
                 },
                 set(target, prop, value, receiver) {
                     if (target[prop] !== value) {
                         _modifiedPaths.add(prop as string);
-                        _data[prop as keyof T] = value;
+                        _data[prop] = value;
                     }
                     return Reflect.set(target, prop, value, receiver);
                 }
@@ -117,6 +119,41 @@ export function createModel<T extends object>(
                     const saved = await repo.save(proxy as any);
                     Object.assign(_data, saved);
                     return proxy;
+                },
+                enumerable: false
+            });
+            Object.defineProperty(proxy, 'getPrimaryKeyValue', {
+                value: function (key: string) {
+                    return proxy[key]; // Lee directamente a través del proxy
+                },
+                enumerable: false
+            });
+
+            Object.defineProperty(proxy, 'toJSON', {
+                value: function () {
+                    return { ..._data }; // Retorna los datos puros sin metadatos del proxy
+                },
+                enumerable: false
+            });
+
+            Object.defineProperty(proxy, 'rowNumber', {
+                get: function () {
+                    return _data[ROW_INDEX_SYMBOL];
+                },
+                enumerable: false
+            });
+
+            Object.defineProperty(proxy, 'markAsSaved', {
+                value: function (rowNum: number) {
+                    _isNew = false;
+                    _data[ROW_INDEX_SYMBOL] = rowNum;
+                },
+                enumerable: false
+            });
+
+            Object.defineProperty(proxy, 'remove', {
+                value: async function () {
+                    return await repo.delete(proxy as any);
                 },
                 enumerable: false
             });

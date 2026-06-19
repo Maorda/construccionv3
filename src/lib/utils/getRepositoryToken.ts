@@ -1,6 +1,6 @@
 import { ClassType } from "../core/types/common.types";
 
-export const getRepositoryToken = (entity: ClassType) => `${entity.name}Repository`;
+export const getRepositoryToken = (entity: ClassType) => `SheetsRepository_${entity.name}`;
 export function deepClone<T>(obj: T): T {
     if (obj === null || obj === undefined) return obj;
     if (obj instanceof Date) return new Date(obj.getTime()) as unknown as T;
