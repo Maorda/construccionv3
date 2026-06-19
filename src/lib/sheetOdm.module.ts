@@ -1,5 +1,4 @@
 import { Module, DynamicModule, Global, Provider, OnApplicationBootstrap, Logger } from '@nestjs/common';
-import { SheetDataTransformer } from './core/base/sheetDataTransformer'; // 💡 Ajusta la ruta real de tu archivo
 import { HttpModule } from '@nestjs/axios';
 import { APP_INTERCEPTOR } from '@nestjs/core';
 
@@ -13,15 +12,23 @@ import { DataSourceManager } from './core/data-source-manager';
 import { MetadataRegistry } from './core/metadata/metadata.registry';
 import { GasTelemetryInterceptor } from './core/interceptors/gas-telemetry.interceptor';
 import { SheetDocumentHydrator } from './core/base/sheet-document-hydrator';
-import { ExpressionEngine } from './stages/expression.engine';
-
-// Operadores de Expresiones (Filtros y Transformaciones)
-// 💡 NOTA: Reemplaza estos nombres por tus clases reales de operadores
-
+import { SheetDataTransformer } from './core/base/sheetDataTransformer';
+import { PopulateEngine } from './core/engine/populate.engine';
+import { QueryEngine } from './core/query/query.engine';
+import { MutationEngine } from './core/engine/mutationEngine';
 
 // Pipeline Stages
 import { MatchStage, ProjectStage, AddFieldsStage } from './stages/filtrado_y_transformacion';
 import { LimitStage, SkipStage, SortStage } from './stages/orden_y_paginacion';
+import { ExpressionEngine } from './stages/expression.engine';
+
+// Operadores
+import {
+  AggregateOperator, ConcatOperator, DateAddOperator, IfOperator,
+  IncOperator, MathOperator, MinMaxOperator, MultiplyOperator,
+  RoundOperator, TimeDiffOperator, TrimOperator, UpperOperator
+} from './stages/transform.operators';
+import { EqOperator, GtOperator } from './stages/filter.operators';
 
 // Infraestructura y Repositorios
 import { PostgresProvider } from './adapters/postgres.provider';
@@ -30,8 +37,7 @@ import { GoogleHealthService } from './adapters/health/google-sheet-health.servi
 import { GasService } from './infrastructure/gas/gas.service';
 import { SheetDataGateway } from './infrastructure/sheet-api/sheet-data.gateway';
 import { GasQueryGateway } from './infrastructure/gas-web-app/gas-query.gateway';
-import { QueryEngine } from './core/query/query.engine';
-import { MutationEngine } from './core/engine/mutationEngine';
+import { InfrastructureProvisioner } from './infrastructure/InfrastructureProvisioner';
 
 // Submódulos Externos
 import { OutboxModule } from './core/outbox/outbox.module';
@@ -42,12 +48,15 @@ import { SheetsRepositoryFactory } from './core/repository/sheets-repository.fac
 import { SheetsRepository } from './core/repository/sheets.repository';
 import { UnitOfWork } from './core/uow/services/unit-of-work.service';
 import { createModel } from './core/model/model.factory';
-import { AggregateOperator, ConcatOperator, DateAddOperator, IfOperator, IncOperator, MathOperator, MinMaxOperator, MultiplyOperator, RoundOperator, TimeDiffOperator, TrimOperator, UpperOperator } from './stages/transform.operators';
-import { EqOperator, GtOperator } from './stages/filter.operators';
-import { InfrastructureProvisioner } from './infrastructure/InfrastructureProvisioner';
+import { RepositoryCoreFacade } from './core/repository/repository-core.facade';
 
+
+// ============================================================================
+// AGRUPACIONES DE PROVIDERS (Para mantener el decorador Module limpio)
+// ============================================================================
 
 const CORE_SHARED_SERVICES: Provider[] = [
+  RepositoryCoreFacade,
   DataSourceManager,
   MetadataRegistry,
   OdmDiagnosticsService,
@@ -61,20 +70,35 @@ const CORE_SHARED_SERVICES: Provider[] = [
   InfrastructureProvisioner,
 ];
 
-// Servicios de uso estrictamente interno (No necesitan ser exportados)
 const INTERNAL_SERVICES: Provider[] = [
   GoogleSheetProvider,
   GasQueryGateway,
   GoogleHealthService,
   SheetDataTransformer,
+  PopulateEngine,
   { provide: APP_INTERCEPTOR, useClass: GasTelemetryInterceptor },
 ];
+
+const TRANSFORM_OPERATORS = [
+  ConcatOperator, IfOperator, MultiplyOperator, IncOperator,
+  MinMaxOperator, RoundOperator, MathOperator, UpperOperator,
+  TrimOperator, DateAddOperator, TimeDiffOperator, AggregateOperator
+];
+
+const FILTER_OPERATORS = [EqOperator, GtOperator];
+
+const PIPELINE_STAGES = [
+  MatchStage, SortStage, LimitStage, SkipStage, ProjectStage, AddFieldsStage
+];
+
+// ============================================================================
+// DECLARACIÓN DEL MÓDULO
+// ============================================================================
+
 @Global()
 @Module({})
 export class SheetOdmModule implements OnApplicationBootstrap {
   private readonly logger = new Logger('SheetOdm');
-
-  // Candado para evitar que el bootstrap se ejecute múltiples veces por los módulos dinámicos
   private static hasBootstrapped = false;
 
   constructor(private readonly provisioner: InfrastructureProvisioner) { }
@@ -84,128 +108,20 @@ export class SheetOdmModule implements OnApplicationBootstrap {
       return;
     }
 
-    SheetOdmModule.hasBootstrapped = true; // Bloqueamos ejecuciones futuras
+    SheetOdmModule.hasBootstrapped = true;
     this.logger.log('--- 🚀 [SheetODM] Iniciando sincronización de infraestructura ---');
 
-    this.provisioner.syncSchema()
-      .then(() => this.logger.log('✅ [SheetODM] Infraestructura lista.'))
-      .catch(err => this.logger.error('❌ [SheetODM] Error de inicialización:', err.message));
-  }
-  /**
-   * Registra los operadores de transformación y filtrado requeridos por el ExpressionEngine
-   */
-  private static createExpressionOperatorsProviders(): Provider[] {
-    return [
-      // =========================================================================
-      // 1. REGISTRO INDIVIDUAL DE OPERADORES (Para el contenedor de NestJS)
-      // =========================================================================
-
-      // Operadores de Filtro Existentes
-      EqOperator,
-      GtOperator,
-
-      // Operadores de Transformación (Existentes + Nuevos)
-      ConcatOperator,
-
-      IfOperator,
-      MultiplyOperator,
-      IncOperator,
-      MinMaxOperator,
-      RoundOperator,
-      MathOperator,
-      UpperOperator,
-      TrimOperator,
-      DateAddOperator,
-      TimeDiffOperator,
-      AggregateOperator,
-
-      // =========================================================================
-      // 2. AGRUPADOR PARA DATA_TRANSFORM_OPERATOR (Inyección por token)
-      // =========================================================================
-      {
-        provide: DATA_TRANSFORM_OPERATOR,
-        useFactory: (
-          concat: ConcatOperator,
-
-          ifOp: IfOperator,
-          multiply: MultiplyOperator,
-          inc: IncOperator,
-          minMax: MinMaxOperator,
-          round: RoundOperator,
-          mathOp: MathOperator,
-          upper: UpperOperator,
-          trim: TrimOperator,
-          dateAdd: DateAddOperator,
-          timeDiff: TimeDiffOperator,
-          aggregate: AggregateOperator
-        ) => [
-            concat,
-
-            ifOp,
-            multiply,
-            inc,
-            minMax,
-            round,
-            mathOp,
-            upper,
-            trim,
-            dateAdd,
-            timeDiff,
-            aggregate
-          ],
-        inject: [
-          ConcatOperator,
-
-          IfOperator,
-          MultiplyOperator,
-          IncOperator,
-          MinMaxOperator,
-          RoundOperator,
-          MathOperator,
-          UpperOperator,
-          TrimOperator,
-          DateAddOperator,
-          TimeDiffOperator,
-          AggregateOperator
-        ],
-      },
-
-      // =========================================================================
-      // 3. AGRUPADOR PARA FILTER_OPERATOR (Inyección por token)
-      // =========================================================================
-      {
-        provide: FILTER_OPERATOR,
-        useFactory: (eq: EqOperator, gt: GtOperator) => [eq, gt],
-        inject: [EqOperator, GtOperator],
-      },
-    ];
+    try {
+      await this.provisioner.syncSchema();
+      this.logger.log('✅ [SheetODM] Infraestructura lista.');
+    } catch (err: any) {
+      this.logger.error(`❌ [SheetODM] Error de inicialización: ${err.message}`);
+    }
   }
 
-  /**
-   * Registra los Stages del Pipeline de consultas
-   */
-  private static createStageProviders(): Provider[] {
-    return [
-      MatchStage,
-      SortStage,
-      LimitStage,
-      SkipStage,
-      ProjectStage,
-      AddFieldsStage,
-      {
-        provide: PIPELINE_STAGE,
-        useFactory: (
-          match: MatchStage,
-          sort: SortStage,
-          limit: LimitStage,
-          skip: SkipStage,
-          project: ProjectStage,
-          addFields: AddFieldsStage,
-        ) => [match, sort, limit, skip, project, addFields],
-        inject: [MatchStage, SortStage, LimitStage, SkipStage, ProjectStage, AddFieldsStage],
-      },
-    ];
-  }
+  // ========================================================================
+  // CONFIGURACIÓN ASÍNCRONA (Root)
+  // ========================================================================
 
   static forRootAsync(options: SheetOdmModuleAsyncOptions): DynamicModule {
     if (!options.useFactory) {
@@ -213,6 +129,7 @@ export class SheetOdmModule implements OnApplicationBootstrap {
     }
 
     return {
+      global: true, // 🚀 Asegura que los providers de forRootAsync sean singletons globales reales
       module: SheetOdmModule,
       imports: [
         HttpModule,
@@ -227,9 +144,10 @@ export class SheetOdmModule implements OnApplicationBootstrap {
       controllers: [OdmDiagnosticsController],
       providers: [
         // 1. Opciones Async
-        ...this.createAsyncProviders(options),
+        { provide: 'DATABASE_OPTIONS', useFactory: options.useFactory, inject: options.inject || [] },
+        { provide: SHEET_ODM_OPTIONS, useFactory: options.useFactory, inject: options.inject || [] },
 
-        // 2. Postgres
+        // 2. Adaptador Postgres
         {
           provide: PostgresProvider,
           useFactory: (opts: SheetOdmModuleOptions) => new PostgresProvider(opts),
@@ -237,83 +155,73 @@ export class SheetOdmModule implements OnApplicationBootstrap {
         },
         { provide: POSTGRES_TOKEN, useExisting: PostgresProvider },
 
-        // 3. Constantes Limpias
+        // 3. Servicios Core
         ...INTERNAL_SERVICES,
         ...CORE_SHARED_SERVICES,
 
-        // 4. Expresiones y Stages
-        ...this.createExpressionOperatorsProviders(),
-        ...this.createStageProviders(),
+        // 4. Operadores de Expresión (Registrados individualmente + Agrupados por Token)
+        ...TRANSFORM_OPERATORS,
+        ...FILTER_OPERATORS,
+        {
+          provide: DATA_TRANSFORM_OPERATOR,
+          useFactory: (...operators: any[]) => operators,
+          inject: TRANSFORM_OPERATORS,
+        },
+        {
+          provide: FILTER_OPERATOR,
+          useFactory: (...operators: any[]) => operators,
+          inject: FILTER_OPERATORS,
+        },
+
+        // 5. Stages del Pipeline
+        ...PIPELINE_STAGES,
+        {
+          provide: PIPELINE_STAGE,
+          useFactory: (...stages: any[]) => stages,
+          inject: PIPELINE_STAGES,
+        },
       ],
       exports: [
-        // Exportamos Módulos
         UowModule,
         OutboxModule,
-
-        // Exportamos Postgres Tokens
         PostgresProvider,
         POSTGRES_TOKEN,
-
-        // Exportamos los servicios compartidos dinámicamente
         ...CORE_SHARED_SERVICES,
       ],
     };
   }
 
-  static forFeature(entities: Function[]): DynamicModule {
-    entities.forEach((entity) => {
-      MetadataRegistry.register(entity as any);
-    });
+  // ========================================================================
+  // REGISTRO DE ENTIDADES (Feature)
+  // ========================================================================
 
+  static forFeature(entities: Function[]): DynamicModule {
     const providers: Provider[] = entities.flatMap((entity) => {
+      MetadataRegistry.register(entity as any);
+
       const repositoryToken = `SheetsRepository_${entity.name}`;
 
+      // 🚀 2. Mira lo limpio que queda ahora el Factory del Repositorio
       const repositoryProvider: Provider = {
         provide: repositoryToken,
-        useFactory: (
-          metadata: MetadataRegistry,
-          dataSource: DataSourceManager,
-          uow: UnitOfWork,
-          hydrator: SheetDocumentHydrator,
-          queryEngine: QueryEngine,
-          mutationEngine: MutationEngine,
-          gasService: GasService,
-          gateway: SheetDataGateway,
-          transformer: SheetDataTransformer
-        ) => new SheetsRepository(entity as any, metadata, dataSource, uow, hydrator, queryEngine, mutationEngine, gasService, gateway, transformer),
-        inject: [
-          MetadataRegistry,
-          DataSourceManager,
-          UnitOfWork,
-          SheetDocumentHydrator,
-          QueryEngine,
-          MutationEngine,
-          GasService,
-          SheetDataGateway,
-          SheetDataTransformer
-        ],
+        useFactory: (coreFacade: RepositoryCoreFacade) =>
+          new SheetsRepository(entity as any, coreFacade),
+        inject: [RepositoryCoreFacade], // Solo 1 inyección
       };
 
       const modelProvider: Provider = {
         provide: `${entity.name}Model`,
-        useFactory: (repo) => createModel(entity as any, repo),
+        useFactory: (repo: SheetsRepository<any>) => createModel(entity as any, repo),
         inject: [repositoryToken],
       };
 
-      return [repositoryProvider, modelProvider, SheetDataTransformer];
+      return [repositoryProvider, modelProvider];
     });
 
     return {
       module: SheetOdmModule,
       providers: providers,
-      exports: providers, // Los repositorios creados se auto-exportan
+      exports: providers,
     };
-  }
-
-  private static createAsyncProviders(options: SheetOdmModuleAsyncOptions): Provider[] {
-    return [
-      { provide: 'DATABASE_OPTIONS', useFactory: options.useFactory!, inject: options.inject || [] },
-      { provide: SHEET_ODM_OPTIONS, useFactory: options.useFactory!, inject: options.inject || [] }
-    ];
   }
 }

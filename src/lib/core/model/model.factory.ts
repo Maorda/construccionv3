@@ -20,7 +20,13 @@ export interface FindOneAndUpdateOptions<T extends object, U = any> extends Quer
 }
 export const InjectModel = (entity: Function) => Inject(`${entity.name}Model`);
 
+export interface PopulateOptions {
+    path: string;
+    // Futuras mejoras: select?: string[], match?: any, limit?: number
+}
+
 export interface QueryOptions<T = any> {
+    populate?: string | string[] | PopulateOptions | PopulateOptions[];
     projection?: Projection<T>;
     limit?: number;
     offset?: number;

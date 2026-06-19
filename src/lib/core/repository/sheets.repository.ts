@@ -14,26 +14,39 @@ import { MutationEngine } from '../engine/mutationEngine';
 import { GasService } from '../../infrastructure/gas/gas.service';
 import { SheetDataGateway } from '../../infrastructure/sheet-api/sheet-data.gateway';
 import { SheetDataTransformer } from '../base/sheetDataTransformer';
+import { PopulateEngine } from '../engine/populate.engine';
+import { RepositoryCoreFacade } from './repository-core.facade';
 
 export class SheetsRepository<T extends object, U extends SheetDocument<T> = SheetDocument<T>> {
     private readonly logger: Logger;
     private readonly sheetName: string;
+    private readonly metadata: MetadataRegistry;
+    private readonly dataSource: DataSourceManager;
+    private readonly uow: UnitOfWork;
+    private readonly hydrator: SheetDocumentHydrator;
+    private readonly queryEngine: QueryEngine;
+    private readonly mutationEngine: MutationEngine;
+    private readonly gasService: GasService;
+    private readonly gateway: SheetDataGateway;
+    private readonly transformer: SheetDataTransformer;
+    private readonly populateEngine: PopulateEngine;
 
     constructor(
-        private readonly entityClass: ClassType<T>,
-        private readonly metadataRegistry: MetadataRegistry,
-        private readonly dataSource: DataSourceManager,
-        private readonly uow: UnitOfWork, // Mantenemos el nombre 'uow'
-        private readonly hydrator: SheetDocumentHydrator,
-        // 🌟 Inyecciones añadidas para que los métodos funcionen
-        private readonly queryEngine: QueryEngine,
-        private readonly mutationEngine: MutationEngine,
-        private readonly gasService: GasService,
-        private readonly gateway: SheetDataGateway,
-        private readonly transformer: SheetDataTransformer,
+        public readonly entityClass: ClassType<T>,
+        core: RepositoryCoreFacade // 🚀 Solo inyectamos el Facade
     ) {
         this.logger = new Logger(`Repository<${this.entityClass.name}>`);
-        this.sheetName = this.metadataRegistry.getSchema(this.entityClass).sheetName;
+        this.metadata = core.metadata;
+        this.dataSource = core.dataSource;
+        this.uow = core.uow;
+        this.hydrator = core.hydrator;
+        this.queryEngine = core.queryEngine;
+        this.mutationEngine = core.mutationEngine;
+        this.gasService = core.gasService;
+        this.gateway = core.gateway;
+        this.transformer = core.transformer;
+        this.populateEngine = core.populateEngine;
+        this.sheetName = this.metadata.getSchema(this.entityClass).sheetName;
     }
 
     /**
@@ -45,7 +58,7 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
             const searchValue = String(filter![propertyName as keyof FilterQuery<T>]);
 
             // 🚀 PARCHE 1: Traducir nombre de propiedad a nombre de Cabecera (Sheet Header)
-            const schema = this.metadataRegistry.getSchema(this.entityClass);
+            const schema = this.metadata.getSchema(this.entityClass);
             const colConfig = schema.columns[propertyName];
             const columnName = (colConfig?.name || propertyName).toUpperCase();
 
@@ -63,6 +76,7 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
         }
 
         const results = await this.find(filter, { ...options, limit: 1 });
+
         return results.length > 0 ? (results[0] as U) : null;
     }
 
@@ -77,7 +91,7 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
             const searchValue = String(safeFilter[propertyName as keyof FilterQuery<T>]);
 
             // 🚀 PARCHE 1: Traducción a cabecera real
-            const schema = this.metadataRegistry.getSchema(this.entityClass);
+            const schema = this.metadata.getSchema(this.entityClass);
             const colConfig = schema.columns[propertyName];
             const columnName = (colConfig?.name || propertyName).toUpperCase();
 
@@ -96,8 +110,18 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
 
         const rawItems = await this.fetchRawData(options?.includeInactive);
         const processedItems = await this.queryEngine.execute(rawItems, safeFilter, options);
+        const instances = processedItems.map(raw => this.hydrateAndCacheRawResult<U>(raw, options));
 
-        return processedItems.map(raw => this.hydrateAndCacheRawResult<U>(raw, options));
+        if (options?.populate && instances.length > 0) {
+            // Pasamos explícitamente <T, U> para silenciar la queja de TS
+            await this.populateEngine.populate<T, U>(
+                instances,
+                this.entityClass,
+                options.populate as any
+            );
+        }
+
+        return instances;
     }
 
     /**
@@ -147,33 +171,102 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
      */
     async save(doc: SheetDocument<T>): Promise<SheetDocument<T>> {
         const pkField = this.getPrimaryKeyField();
-
-        // Ahora esto SÍ funcionará porque definimos el método en la clase base
         const pk = doc.getPrimaryKeyValue(pkField as keyof T);
-
         const rowIndex = doc.rowNumber;
         const isNew = rowIndex === undefined;
         const operation: TypeOp = isNew ? TypeOp.INSERT : TypeOp.UPDATE;
 
-        const payload = {
-            ...doc.toJSON(),
-            ...(rowIndex !== undefined ? { _row: rowIndex } : {})
-        } as T & { _row?: number };
+        // 1. Obtenemos el payload completo (Padre + posibles hijos anidados)
+        const rawPayload = doc.toJSON() as any;
+        const payload = { ...rawPayload };
+        if (rowIndex !== undefined) {
+            payload._row = rowIndex;
+        }
 
-        // --- UoW y Dispatcher ---
+        // 2. Arreglo para almacenar las mutaciones de los hijos extraídos
+        const childMutations: { entityClass: ClassType<any>; payload: any; operation: TypeOp }[] = [];
+
+        // 3. 🔍 INSPECCIÓN DE METADATOS: Buscamos las SubColecciones
+        const relations = this.metadata.getCompiledRelations(this.entityClass);
+
+        for (const rel of relations) {
+            // Si es subcolección y los datos vinieron en el JSON...
+            if (rel.type === 'subcollection' && payload[rel.propertyName]) {
+                const childrenArray = payload[rel.propertyName];
+
+                if (Array.isArray(childrenArray)) {
+                    const TargetEntityClass = rel.targetEntity();
+
+                    // Obtenemos la columna foránea (ej. idObrero)
+                    const joinColName = rel.joinColumn || `${this.entityClass.name.toLowerCase()}Id`;
+
+                    for (const child of childrenArray) {
+                        // 💉 MAGIA: Inyectamos automáticamente el ID del padre en el hijo
+                        child[joinColName] = pk;
+
+                        childMutations.push({
+                            entityClass: TargetEntityClass,
+                            payload: child,
+                            // Si el hijo no tiene _row, es un INSERT, si no, es UPDATE
+                            operation: child._row === undefined ? TypeOp.INSERT : TypeOp.UPDATE
+                        });
+                    }
+                }
+
+                // 🧹 CRÍTICO: Borramos el array del payload del padre. 
+                // Esto evita que intentemos guardar un Array en una celda de Sheets.
+                delete payload[rel.propertyName];
+            }
+        }
+
+        // =========================================================
+        // 4. DESPACHO TRANSACCIONAL (UoW)
+        // =========================================================
         if (this.uow.hasActiveTransaction()) {
+            // A. Encolar al padre limpio
             this.uow.queueOperation({
                 type: operation,
                 entityClass: this.entityClass,
                 sheetName: this.sheetName,
                 doc: payload,
-                pk: pk // Aquí tenemos el pk tipado
+                pk: pk
             });
+
+            // B. Encolar a todos los hijos extraídos
+            for (const childMut of childMutations) {
+                const childPkField = this.metadata.getPrimaryKeyField(childMut.entityClass);
+                const childPk = childMut.payload[childPkField];
+                const childSheetName = this.metadata.getSchema(childMut.entityClass).sheetName;
+
+                this.uow.queueOperation({
+                    type: childMut.operation,
+                    entityClass: childMut.entityClass,
+                    sheetName: childSheetName,
+                    doc: childMut.payload,
+                    pk: childPk
+                });
+            }
+
             this.uow.register(doc, pk, this.entityClass);
             return doc;
         }
 
+        // =========================================================
+        // 5. DESPACHO DIRECTO (Sin UoW)
+        // =========================================================
+        // A. Despachamos al padre
         await this.dataSource.dispatchMutation(this.entityClass, operation, payload, payload);
+
+        // B. Despachamos a los hijos como tareas independientes a la Outbox
+        for (const childMut of childMutations) {
+            await this.dataSource.dispatchMutation(
+                childMut.entityClass,
+                childMut.operation,
+                childMut.payload,
+                childMut.payload
+            );
+        }
+
         return doc;
     }
 
@@ -275,7 +368,7 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
 
         const headers = allRows[0].map((h: any) => String(h).trim().toUpperCase());
         const dataRows = allRows.slice(1);
-        const schema = this.metadataRegistry.getSchema(this.entityClass);
+        const schema = this.metadata.getSchema(this.entityClass);
 
         let items = dataRows.map((row, index) => {
             const plainObject: any = {};
@@ -307,7 +400,7 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
     }
 
     private getPrimaryKeyField(): string {
-        return this.metadataRegistry.getPrimaryKeyField(this.entityClass);
+        return this.metadata.getPrimaryKeyField(this.entityClass);
     }
     async commitBulk(documents: any[]): Promise<void> {
         if (!documents || documents.length === 0) return;
@@ -343,7 +436,7 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
     }
 
     private async processDeletes(docs: any[]): Promise<void> {
-        const deleteControlProp = this.metadataRegistry.getDeleteControlProperty(this.entityClass);
+        const deleteControlProp = this.metadata.getDeleteControlProperty(this.entityClass);
         const hardDeleteRanges: string[] = [];
         const softDeleteUpdates: { range: string; values: any[][] }[] = [];
 
@@ -379,8 +472,8 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
         await this.gateway.appendRows(this.sheetName, rows);
     }
     private prepareDataWithVersion(dataObject: any, newVersion: number): any[] {
-        const versionField = this.metadataRegistry.getVersionField(this.entityClass);
-        const schema = this.metadataRegistry.getSchema(this.entityClass);
+        const versionField = this.metadata.getVersionField(this.entityClass);
+        const schema = this.metadata.getSchema(this.entityClass);
 
         return schema.columnList.map(columnName => {
             if (columnName === versionField) return newVersion;
