@@ -115,7 +115,7 @@ export class SheetDocumentHydrator {
             }
 
             // 8. 🛡️ SERIALIZADOR TOTAL (toJSON)
-            Object.defineProperty(hydratedDoc, 'toJSON', {
+            /*Object.defineProperty(hydratedDoc, 'toJSON', {
                 value: function () {
                     const plainObject = {} as any;
                     for (const col of Object.keys(details)) {
@@ -133,7 +133,7 @@ export class SheetDocumentHydrator {
                 },
                 enumerable: false,
                 configurable: true
-            });
+            });*/
 
             return hydratedDoc as U;
 

@@ -35,6 +35,8 @@
     "@types/javascript-obfuscator": "^0.0.5",
     "@types/jest": "^29.5.14",
     "@types/pg": "^8.20.0",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.14.2",
     "javascript-obfuscator": "^5.4.3",
     "jest": "^29.7.0",
     "ts-jest": "^29.4.11",

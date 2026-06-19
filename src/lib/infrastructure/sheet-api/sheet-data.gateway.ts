@@ -212,7 +212,8 @@ export class SheetDataGateway implements ISheetWriteDriver {
             const res = await this.auth.sheets.spreadsheets.values.get({
                 spreadsheetId: this.spreadsheetId,
                 range: sheetName,
-                valueInputOption: 'RAW',
+                //valueInputOption: 'RAW',
+                valueRenderOption: 'UNFORMATTED_VALUE',
             });
 
             const values = res.data.values;

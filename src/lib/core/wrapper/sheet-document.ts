@@ -9,6 +9,7 @@ export abstract class SheetDocument<T> {
         protected readonly _repository: any, // Aquí va el SheetsRepository<T>
         protected _isNew: boolean,
         protected readonly _entityClass: Function
+
     ) {
         // Asignamos las propiedades del objeto de datos a la instancia
         Object.assign(this, _data);
@@ -18,7 +19,7 @@ export abstract class SheetDocument<T> {
      * Guarda el documento actual usando el repositorio.
      */
     async save(): Promise<this> {
-        return await this._repository.save(this);
+        return await this._repository.save(this) as this;
     }
 
     /**
@@ -46,7 +47,7 @@ export abstract class SheetDocument<T> {
     /**
      * Serializa el documento de vuelta a un objeto plano.
      */
-    toObject(): T {
+    toJSON(): T {
         const plain = { ...this } as any;
         // Limpiamos los metadatos internos antes de retornar el objeto
         delete plain._data;
@@ -54,5 +55,9 @@ export abstract class SheetDocument<T> {
         delete plain._isNew;
         delete plain._entityClass;
         return plain;
+    }
+
+    getPrimaryKeyValue(key: keyof T): string | number {
+        return (this as any)[key]; // Aquí el cast es seguro porque solo se usa para lectura
     }
 }

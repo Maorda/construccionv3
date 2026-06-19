@@ -1,12 +1,12 @@
 import { PrimaryKey } from "../lib/core/decorators/primarykey.decorator";
 import { Column } from "../lib/core/decorators/column.decorator";
 import { Table } from "../lib/core/decorators/table.decorator";
-import { IsString, IsNotEmpty, IsNumber } from "class-validator";
+import { IsString, IsNotEmpty, IsNumber, IsOptional } from "class-validator";
 
 export class CreateObreroDto {
-    @IsString()
+    @IsOptional()
     @IsNotEmpty()
-    id: string;
+    id?: string;
 
     @IsString()
     @IsNotEmpty()

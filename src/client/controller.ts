@@ -1,4 +1,4 @@
-import { Body, Controller, HttpCode, HttpStatus, Injectable, Param, Post } from "@nestjs/common";
+import { Body, Controller, HttpCode, HttpStatus, Injectable, Param, Post, UsePipes, ValidationPipe } from "@nestjs/common";
 import { Logger } from "@nestjs/common";
 import { InjectModel, Model } from "@sheetOdm/core/model/model.factory";
 import { CreateObreroDto, ObreroEntity } from "./obrero.entity";
@@ -12,14 +12,19 @@ export class PlanillaTareoService {
     ) { }
 
     async createObrero(dto: CreateObreroDto): Promise<ObreroEntity> {
-        this.logger.log(`Creando obrero: ${dto.id}`);
+        this.logger.log(`Intentando persistir obrero con DNI: ${dto.dni}`);
 
+        // 1. Verificación en Postgres (Rápida)
         const existingUser = await this.obreroModel.findOne({ dni: dto.dni });
         if (existingUser) {
             throw new Error(`El obrero con DNI ${dto.dni} ya existe.`);
         }
-        const user = new this.obreroModel(dto);
-        return await user.save();
+
+        // 2. Guardado en Postgres
+        // Al instanciar el modelo, el ODM debería manejar la persistencia en DB 
+        // y emitir el evento para que Google Sheets se sincronice asíncronamente.
+        const nuevoObrero = new this.obreroModel(dto);
+        return await nuevoObrero.save();
     }
 
 }
@@ -27,22 +32,14 @@ export class PlanillaTareoService {
 
 @Controller('admin-planilla')
 export class PlanillaAdminController {
-    private readonly logger = new Logger(PlanillaAdminController.name);
-    constructor(
-        private readonly planillaService: PlanillaTareoService,
-    ) { }
-
+    constructor(private readonly planillaService: PlanillaTareoService) { }
 
     @Post('obrero')
     @HttpCode(HttpStatus.CREATED)
-    async createObrero(@Body() body: any) {
-        this.logger.log(`Recibiendo petición para guardar obrero: ${body.id}`);
-        try {
-            return await this.planillaService.createObrero(body);
-        } catch (error: any) {
-            this.logger.error(`Error al guardar: ${error.message}`);
-            throw error;
-        }
+    @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true })) // 👈 Habilita la validación
+    async createObrero(@Body() createDto: CreateObreroDto) {
+        // Ahora 'createDto' ya está validado, si falta un campo, Nest devuelve 400 Bad Request
+        return await this.planillaService.createObrero(createDto);
     }
 
 }

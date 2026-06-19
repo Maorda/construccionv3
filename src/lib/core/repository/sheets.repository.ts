@@ -143,32 +143,34 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
     /**
      * 📝 GUARDAR (UoW o Directo)
      */
-    async save(doc: U): Promise<U> {
-        const pk = (doc as any)[this.getPrimaryKeyField()];
-        const rowIndex = (doc as any)[ROW_INDEX_SYMBOL];
+    async save(doc: SheetDocument<T>): Promise<SheetDocument<T>> {
+        const pkField = this.getPrimaryKeyField();
+
+        // Ahora esto SÍ funcionará porque definimos el método en la clase base
+        const pk = doc.getPrimaryKeyValue(pkField as keyof T);
+
+        const rowIndex = doc.rowNumber;
         const isNew = rowIndex === undefined;
         const operation: TypeOp = isNew ? TypeOp.INSERT : TypeOp.UPDATE;
 
-        // 🚀 PARCHE 2: Asegurar que la meta-información crítica sobreviva al toJSON
-        const payload = doc.toJSON();
-        if (!isNew) {
-            payload._row = rowIndex; // Adjuntamos explícitamente el índice para el motor de mutación
-        }
+        const payload = {
+            ...doc.toJSON(),
+            ...(rowIndex !== undefined ? { _row: rowIndex } : {})
+        } as T & { _row?: number };
 
+        // --- UoW y Dispatcher ---
         if (this.uow.hasActiveTransaction()) {
-            this.logger.debug(`[Repository] Encolando operación ${operation} en UoW para ${this.sheetName}`);
             this.uow.queueOperation({
                 type: operation,
                 entityClass: this.entityClass,
                 sheetName: this.sheetName,
                 doc: payload,
-                pk: pk
+                pk: pk // Aquí tenemos el pk tipado
             });
             this.uow.register(doc, pk, this.entityClass);
             return doc;
         }
 
-        this.logger.debug(`[Repository] Ejecución directa ${operation} en ${this.sheetName}`);
         await this.dataSource.dispatchMutation(this.entityClass, operation, payload, payload);
         return doc;
     }
