@@ -22,8 +22,9 @@ export class QueryEngine implements IQueryEngine {
 
         // Registro Dinámico Automático leyendo la propiedad de cada Stage instanciado
         for (const stage of this.stages) {
-            if (!stage.operator) {
-                throw new Error(`[QueryEngine] El stage ${stage.constructor.name} no define la propiedad obligatoria 'operator'.`);
+            // Mejor validación
+            if (!stage || typeof stage.operator !== 'string') {
+                throw new Error(`[QueryEngine] Invalid stage injected. A valid 'operator' string is required in ${stage?.constructor?.name || 'UnknownStage'}.`);
             }
             this.stageRegistry.set(stage.operator, stage);
         }

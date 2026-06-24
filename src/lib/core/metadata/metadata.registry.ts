@@ -1,4 +1,4 @@
-// src/lib/services/metadata-registry.service.ts
+import { instanceToPlain } from 'class-transformer';
 import { Injectable, Logger } from '@nestjs/common';
 import {
     SHEETS_PRIMARY_KEY,
@@ -13,6 +13,9 @@ import {
 } from '../../shared/constants/constants';
 import { ColumnOptions, ReferenceOptions, SubCollectionOptions } from '../../core/metadata/interfaces';
 import { ClassType } from '../../core/types/common.types';
+import { RelationOptions } from '@sheetOdm/stages/interfaces/query-stage.interface';
+import { entityDataMap } from '../repository/sheets.repository';
+import { EntityStore } from '../store/entity-store';
 
 export type CompiledRelation =
     | {
@@ -32,7 +35,7 @@ export type CompiledRelation =
         targetEntity: () => ClassType<any>;
         joinColumn?: string;
         localField?: string;
-        cascadeDelete: boolean;
+
         onDelete: 'CASCADE' | 'SET_NULL' | 'RESTRICT';
         rawOptions: SubCollectionOptions;
     };
@@ -59,6 +62,7 @@ if (!globalThis[ODM_GLOBAL_REGISTRY_KEY]) {
 @Injectable()
 export class MetadataRegistry {
     private static entities: Set<Function> = new Set();
+    private relations = new Map<ClassType<any>, Map<string, CompiledRelation>>();
     private readonly logger = new Logger(MetadataRegistry.name);
 
     // Cachés a nivel de instancia
@@ -210,7 +214,7 @@ export class MetadataRegistry {
                     targetEntity: rawRel.targetEntity,
                     joinColumn: subOptions.joinColumn,
                     localField: subOptions.localField,
-                    cascadeDelete: subOptions.cascadeDelete,
+
                     onDelete: subOptions.onDelete || 'RESTRICT',
                     rawOptions: subOptions
                 };
@@ -248,10 +252,23 @@ export class MetadataRegistry {
         };
     }
 
+
     // ------------------ MÉTODOS DE REGISTRO ESTÁTICO ------------------
     static registerEntity(entity: Function) {
         this.entities.add(entity);
     }
+    serialize<T extends object>(entity: T, entityClass: ClassType<T>): any[] {
+        const schema = this.getSchema(entityClass);
+
+        // Recuperamos del Store centralizado
+        const rawData = EntityStore.get(entity) || entity;
+
+        return schema.columnList.map(propertyName => {
+            const valor = (rawData as any)[propertyName];
+            return valor === undefined || valor === null ? "" : valor;
+        });
+    }
+
 
 
 }

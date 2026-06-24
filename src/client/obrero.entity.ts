@@ -1,6 +1,6 @@
 import { Column } from "../lib/core/decorators/column.decorator";
 import { PrimaryKey } from "../lib/core/decorators/primarykey.decorator";
-import { SubCollection } from "../lib/core/decorators/subcollection.decorator";
+import { SubCollection } from "../lib/core/decorators/subCollection.decorator";
 
 import { Table } from "../lib/core/decorators/table.decorator";
 import { IsString, IsNotEmpty, IsNumber, IsOptional } from "class-validator";
@@ -55,6 +55,6 @@ export class ObreroEntity {
     @Column({ name: 'SALDO_HORAS_EXTRA_ARRANGED', type: 'number', default: 0 })
     saldoHorasExtraArrastrado: number; // Negativo si debe horas (Dinámica de Deuda de Horas)
 
-    @SubCollection(() => AdelantoEntity, { joinColumn: 'idObrero' })
+    @SubCollection(() => AdelantoEntity, { joinColumn: 'idObrero', localField: 'idObrero' })
     adelantos: AdelantoEntity[];
 }

@@ -5,7 +5,7 @@ import { ClassType } from '../../types/common.types';
 
 export interface PendingOperation {
     type: TypeOp;
-    entityClass: Function;
+    entityClass: ClassType<any>;
     sheetName: string;
     doc: any;
     pk: string | number;

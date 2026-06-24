@@ -1,15 +1,18 @@
 // src/core/repository/repository-core.facade.ts
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { MetadataRegistry } from '../metadata/metadata.registry';
 import { DataSourceManager } from '../data-source-manager';
 import { UnitOfWork } from '../uow/services/unit-of-work.service';
 import { SheetDocumentHydrator } from '../base/sheet-document-hydrator';
 import { QueryEngine } from '../query/query.engine';
 import { MutationEngine } from '../engine/mutationEngine';
-import { GasService } from '../../infrastructure/gas/gas.service';
+
 import { SheetDataGateway } from '../../infrastructure/sheet-api/sheet-data.gateway';
 import { SheetDataTransformer } from '../base/sheetDataTransformer';
 import { PopulateEngine } from '../engine/populate.engine';
+import { GasQueryGateway } from '../../infrastructure/gas-web-app/gas-query.gateway';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { Cache } from 'cache-manager'
 
 @Injectable()
 export class RepositoryCoreFacade {
@@ -20,9 +23,12 @@ export class RepositoryCoreFacade {
         public readonly hydrator: SheetDocumentHydrator,
         public readonly queryEngine: QueryEngine,
         public readonly mutationEngine: MutationEngine,
-        public readonly gasService: GasService,
+        public readonly readGateway: GasQueryGateway,
+
         public readonly gateway: SheetDataGateway,
+
         public readonly transformer: SheetDataTransformer,
         public readonly populateEngine: PopulateEngine,
+        @Inject(CACHE_MANAGER) public readonly cacheManager: Cache
     ) { }
 }

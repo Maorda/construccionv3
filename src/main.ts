@@ -1,3 +1,4 @@
+import 'reflect-metadata'; // <--- ESTA ES LA LÍNEA QUE FALTABA
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 

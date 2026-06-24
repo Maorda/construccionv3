@@ -8,7 +8,9 @@ import { RepositoryCoreFacade } from './repository-core.facade'; // 🚀 Importa
 export class SheetsRepositoryFactory {
 
     // El constructor queda completamente limpio. Ya no necesitas inyectar los 9 singletons uno por uno.
-    constructor(private readonly moduleRef: ModuleRef) { }
+    constructor(
+        private readonly moduleRef: ModuleRef
+    ) { }
 
     /**
      * Fabrica dinámicamente un SheetsRepository ligado al Request actual.

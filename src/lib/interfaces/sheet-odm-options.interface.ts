@@ -37,6 +37,11 @@ export interface SheetOdmModuleOptions {
 
     /** Si es true, el HealthCheck se ejecuta al arrancar */
     checkConnectionOnBoot?: boolean;
+    /** URL de la Web App desplegada en Google Apps Script */
+    webAppUrl: string;
+    /** Clave de autorización para proteger tu endpoint de GAS */
+    apiKey: string;
+    /** Tiempo máximo de espera en milisegundos para las peticiones a GAS (Opcional) */
 
     /** Tiempo de espera máximo para respuestas de la API de Google (ms) */
     timeout?: number;

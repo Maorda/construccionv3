@@ -1,18 +1,19 @@
-import { ROW_INDEX_SYMBOL } from '../../shared/constants/constants';
+import { ROW_INDEX_SYMBOL, INTERNAL_REPO, INTERNAL_NEW } from '../../shared/constants/constants';
 
 export abstract class SheetDocument<T> {
     // Declaramos los campos del documento (se asignarán dinámicamente)
     [key: string]: any;
 
     constructor(
-        protected _data: T,
-        protected readonly _repository: any, // Aquí va el SheetsRepository<T>
-        protected _isNew: boolean,
-        protected readonly _entityClass: Function
-
+        data: T,
+        repository: any,
+        isNew: boolean
     ) {
-        // Asignamos las propiedades del objeto de datos a la instancia
-        Object.assign(this, _data);
+        // Las propiedades protegidas por Symbol no colisionarán nunca con keys de `data`
+        Object.defineProperty(this, INTERNAL_REPO, { value: repository, enumerable: false });
+        Object.defineProperty(this, INTERNAL_NEW, { value: isNew, enumerable: false, writable: true });
+
+        Object.assign(this, data);
     }
 
     /**
@@ -48,13 +49,24 @@ export abstract class SheetDocument<T> {
      * Serializa el documento de vuelta a un objeto plano.
      */
     toJSON(): T {
-        const plain = { ...this } as any;
-        // Limpiamos los metadatos internos antes de retornar el objeto
-        delete plain._data;
-        delete plain._repository;
-        delete plain._isNew;
-        delete plain._entityClass;
-        return plain;
+        // 🔥 SOLUCIÓN: Extraemos directamente los valores puros.
+        // Si tu arquitectura guarda los datos originales dentro de `_data`, devuélvelos directamente.
+        if (this._data) {
+            // Clonamos profundamente (shallow clone) para evitar mutaciones accidentales
+            return { ...this._data } as T;
+        }
+
+        // 🛡️ BACKUP: Si NO usas _data y las propiedades están en `this` mediante getters/proxy,
+        // extraemos la data de forma segura iterando las llaves expuestas del esquema:
+        const plain: any = {};
+        for (const key of Object.keys(this)) {
+            // Omitimos variables privadas internas de Nest o del Wrapper
+            if (!key.startsWith('_') && key !== 'logger') {
+                plain[key] = (this as any)[key];
+            }
+        }
+
+        return plain as T;
     }
 
     getPrimaryKeyValue(key: keyof T): string | number {

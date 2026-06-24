@@ -24,7 +24,6 @@ export function SubCollection(arg: (() => ClassType<any>) | ClassType<any>, opti
             isMany: true,
             propertyName,
             joinColumn: explicitJoinColumn, // 👈 Se inyecta directamente el valor obligatorio
-            cascadeDelete: options.cascadeDelete ?? false, // Fallback seguro
             onDelete: options.onDelete || 'CASCADE'
         };
 

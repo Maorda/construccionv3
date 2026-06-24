@@ -1,23 +1,29 @@
-import { Inject } from '@nestjs/common';
+import { Inject, Logger } from '@nestjs/common';
 import { SheetDocument } from '../wrapper/sheet-document';
 import { SheetsRepository } from '../repository/sheets.repository';
 import { ROW_INDEX_SYMBOL } from '../../shared/constants/constants';
 import { ClassType } from '../types/common.types';
+
+// ============================================================================
+// TIPOS Y OPCIONES (Tipado Estricto Mongoose-like)
+// ============================================================================
+
 export type UpdateQuery<T> = {
     [P in keyof T]?: T[P];
 } & {
     $set?: Partial<T>;
-    $inc?: { [P in keyof T]?: number }; // Más preciso que Record<keyof T, number>
+    $inc?: { [P in keyof T]?: number };
     $push?: { [key: string]: any };
     $pull?: { [key: string]: any };
     $unset?: { [P in keyof T]?: boolean | number | string };
 };
+
 export interface FindOneAndUpdateOptions<T extends object, U = any> extends QueryOptions<T> {
     upsert?: boolean;
     new?: boolean;
-    // Sobrescribimos con el tipo específico U si es necesario
     customConstructor?: ConstructorSignature<T, U>;
 }
+
 export const InjectModel = (entity: Function) => Inject(`${entity.name}Model`);
 
 export interface PopulateOptions {
@@ -31,7 +37,7 @@ export interface QueryOptions<T = any> {
     limit?: number;
     offset?: number;
     sort?: { field: string; order: 'ASC' | 'DESC' };
-    includeInactive?: boolean; // Control de Soft Delete
+    includeInactive?: boolean;
     skip?: number;
     forceRefresh?: boolean;
     customConstructor?: ConstructorSignature<T, any>;
@@ -40,7 +46,7 @@ export interface QueryOptions<T = any> {
 
 export type ConstructorSignature<T, U> = new (
     data: T,
-    repo: any, // Usamos any aquí para romper la dependencia circular
+    repo: any,
     isNew: boolean,
     ...args: any[]
 ) => U;
@@ -48,23 +54,19 @@ export type ConstructorSignature<T, U> = new (
 export type Projection<T = any> = {
     [P in keyof T]?: boolean | number;
 } | Record<string, any>;
+
 export type FilterQuery<T = any> = {
-    // 1. Filtros estándar (acceso a propiedades de T)
     [P in keyof T]?: FieldFilter<T[P]>;
 } & {
-    // 2. Operadores Lógicos (que no son campos de T, pero son permitidos)
     $or?: FilterQuery<T>[];
     $and?: FilterQuery<T>[];
     $nor?: FilterQuery<T>[];
-
-    // 3. (Opcional) Si tu motor de consultas soporta flags globales o metadatos en el query
-    // $comment?: string;
-    // $hint?: any;
 } & {
-    // Solo si es estrictamente necesario, y con una advertencia
-    [key: string]: any;
+    [key: string]: any; // Válvula de escape por si el engine soporta queries custom
 };
+
 export type FieldFilter<T> = T | ComparisonOperators<T>;
+
 export type ComparisonOperators<T> = {
     $eq?: T;
     $gt?: T;
@@ -77,119 +79,168 @@ export type ComparisonOperators<T> = {
     $exists?: boolean;
     $regex?: string;
 };
+
+// ============================================================================
+// INTERFAZ DEL MODELO (Active Record + Data Mapper)
+// ============================================================================
+
 export type Model<T extends object> = {
     new(data?: Partial<T>): T & SheetDocument<T>;
     save(data: Partial<T>): Promise<T & SheetDocument<T>>;
     find(filter?: FilterQuery<T>, options?: QueryOptions<T>): Promise<(T & SheetDocument<T>)[]>;
     findOne(filter?: FilterQuery<T>, options?: QueryOptions<T>): Promise<(T & SheetDocument<T>) | null>;
-    findOneAndUpdate(filter: FilterQuery<T>, update: any, options?: any): Promise<(T & SheetDocument<T>) | null>;
+    findOneAndUpdate(filter: FilterQuery<T>, update: UpdateQuery<T>, options?: FindOneAndUpdateOptions<T>): Promise<(T & SheetDocument<T>) | null>;
     aggregate<R = any>(pipeline: any[]): Promise<R[]>;
 };
 
-// Se añade RelationEngine como dependencia opcional para soportar el .populate()
+// ============================================================================
+// FÁBRICA DEL MODELO (Model Factory)
+// ============================================================================
+
 export function createModel<T extends object>(
     entityClass: ClassType<T>,
     repo: SheetsRepository<T>,
-
 ): Model<T> {
-    // 1. Definimos la clase que servirá de contenedor (instancias)
-    class ModelClass {
+
+    class DocumentModel {
+        // Tipos de uso interno. No se inicializan aquí para evitar que sean enumerables
+        declare private __isNew: boolean;
+        declare private __modifiedPaths: Set<string>;
+        private readonly logger = new Logger(DocumentModel.name);
+
+        getData(): Record<string, any> {
+            const data: Record<string, any> = {};
+            // Al estar dentro de la clase, 'this' tiene acceso a las propiedades
+            // incluso si el Hydrator intentó ocultarlas del mundo exterior.
+            const allKeys = Object.getOwnPropertyNames(this);
+
+            for (const key of allKeys) {
+                // Filtramos lo que no es dato de negocio
+                if (key !== 'logger' && !key.startsWith('_') && key !== 'constructor') {
+                    data[key] = (this as any)[key];
+                }
+            }
+            return data;
+        }
+
         constructor(data: Partial<T> = {}) {
-            const _data = { ...data } as any;
-            const _modifiedPaths = new Set<string>();
-            let _isNew = _data[ROW_INDEX_SYMBOL] === undefined;
-            let _version = _data.version || 0;
+            this.logger.debug(`[FLOW-2] Datos recibidos en Constructor: ${Object.keys(data).length} keys. Keys: ${Object.keys(data)}`);
+            // 1. Configuramos estado interno
+            Object.defineProperty(this, '__isNew', {
+                value: data[ROW_INDEX_SYMBOL as keyof Partial<T>] === undefined,
+                writable: true,
+                enumerable: false,
+            });
+            Object.defineProperty(this, '__modifiedPaths', {
+                value: new Set<string>(),
+                writable: true,
+                enumerable: false,
+            });
 
-            const instance = Object.assign(Object.create(entityClass.prototype), _data);
+            // 2. Asignamos los datos
 
-            const proxy = new Proxy(instance, {
-                get(target, prop, receiver) {
-                    if (prop === '_data') return _data;
-                    if (prop === '_isNew') return _isNew;
-                    // Permitir que el proxy resuelva el símbolo de la fila
-                    if (prop === ROW_INDEX_SYMBOL) return _data[ROW_INDEX_SYMBOL];
-                    return Reflect.get(target, prop, receiver);
-                },
+            Object.assign(this, data);
+            this.logger.debug(`[FLOW-3] Instancia post-asignación (Nombre): ${this['nombre'] || 'UNDEFINED'}`);
+
+            // --- INSTRUMENTACIÓN ---
+            console.log(`🔍 [DocumentModel] Instancia creada con keys:`, Object.keys(this));
+            console.log(`🔍 [DocumentModel] Datos asignados (id):`, (this as any).id);
+            console.log(`🔍 [DocumentModel] Datos asignados (nombre):`, (this as any).nombre);
+            // -----------------------
+
+            return new Proxy(this, {
                 set(target, prop, value, receiver) {
-                    if (target[prop] !== value) {
-                        _modifiedPaths.add(prop as string);
-                        _data[prop] = value;
+                    if (target[prop as keyof DocumentModel] !== value) {
+                        target.__modifiedPaths.add(prop as string);
                     }
                     return Reflect.set(target, prop, value, receiver);
                 }
             });
 
-            // Definimos el método save en la instancia (capacidad Active Record)
-            Object.defineProperty(proxy, 'save', {
-                value: async function () {
-                    const saved = await repo.save(proxy as any);
-                    Object.assign(_data, saved);
-                    return proxy;
-                },
-                enumerable: false
-            });
-            Object.defineProperty(proxy, 'getPrimaryKeyValue', {
-                value: function (key: string) {
-                    return proxy[key]; // Lee directamente a través del proxy
-                },
-                enumerable: false
-            });
-
-            Object.defineProperty(proxy, 'toJSON', {
-                value: function () {
-                    return { ..._data }; // Retorna los datos puros sin metadatos del proxy
-                },
-                enumerable: false
-            });
-
-            Object.defineProperty(proxy, 'rowNumber', {
-                get: function () {
-                    return _data[ROW_INDEX_SYMBOL];
-                },
-                enumerable: false
-            });
-
-            Object.defineProperty(proxy, 'markAsSaved', {
-                value: function (rowNum: number) {
-                    _isNew = false;
-                    _data[ROW_INDEX_SYMBOL] = rowNum;
-                },
-                enumerable: false
-            });
-
-            Object.defineProperty(proxy, 'remove', {
-                value: async function () {
-                    return await repo.delete(proxy as any);
-                },
-                enumerable: false
-            });
-
-            return proxy;
         }
 
-        // 2. Implementamos los métodos estáticos del contrato Model<T>
+        // ====================================================================
+        // MÉTODOS DE INSTANCIA (Capacidad Active Record)
+        // Optimizados en el prototipo para no consumir memoria redundante
+        // ====================================================================
+
+        async save(): Promise<T & SheetDocument<T>> {
+
+            const saved = await repo.save(this as any);
+            Object.assign(this, saved);
+            return this as unknown as T & SheetDocument<T>;
+        }
+
+        async remove(): Promise<void> {
+            await repo.delete(this as any);
+        }
+
+        getPrimaryKeyValue(key: string): any {
+            return (this as any)[key];
+        }
+
+        toJSON() {
+            const plain: any = {};
+
+            // 🚀 La magia: Obtenemos TODOS los nombres de propiedades, 
+            // sin importar si son enumerables o no.
+            const allProps = Object.getOwnPropertyNames(this);
+
+            for (const prop of allProps) {
+                // Filtramos lo que NO queremos incluir (logger, metadatos, etc.)
+                if (
+                    prop !== 'logger' &&
+                    !prop.startsWith('_') &&
+                    prop !== 'constructor'
+                ) {
+                    // Accedemos directamente al valor
+                    plain[prop] = (this as any)[prop];
+                }
+            }
+
+            return plain;
+        }
+
+        get rowNumber(): number | undefined {
+            return (this as any)[ROW_INDEX_SYMBOL];
+        }
+
+        markAsSaved(rowNum: number): void {
+            this.__isNew = false;
+            (this as any)[ROW_INDEX_SYMBOL] = rowNum;
+        }
+
+        // ====================================================================
+        // MÉTODOS ESTÁTICOS (Delegación al Repositorio)
+        // Ahora con tipado fuerte inferido desde T
+        // ====================================================================
+
         static async save(data: Partial<T>): Promise<T & SheetDocument<T>> {
-            const instance = new ModelClass(data);
-            return (instance as any).save();
+            const instance = new DocumentModel(data);
+            return instance.save();
         }
 
-        static async find(filter?: any, options?: any) {
-            return await repo.find(filter, options);
+        static async find(filter?: FilterQuery<T>, options?: QueryOptions<T>) {
+            return repo.find(filter, options);
         }
 
-        static async findOne(filter?: any, options?: any) {
-            return await repo.findOne(filter, options);
+        static async findOne(filter?: FilterQuery<T>, options?: QueryOptions<T>) {
+            return repo.findOne(filter, options);
         }
 
-        static async findOneAndUpdate(filter: any, update: any, options?: any) {
-            return await repo.findOneAndUpdate(filter, update, options);
+        static async findOneAndUpdate(filter: FilterQuery<T>, update: UpdateQuery<T>, options?: FindOneAndUpdateOptions<T>) {
+            return repo.findOneAndUpdate(filter, update, options);
         }
 
         static async aggregate<R = any>(pipeline: any[]): Promise<R[]> {
-            return await repo.aggregate(pipeline);
+            return repo.aggregate<R>(pipeline);
         }
     }
 
-    // Retornamos como Model<T> para que TS valide el contrato
-    return ModelClass as unknown as Model<T>;
+    // 🚀 MAGIA DE HERENCIA: Vinculamos el prototipo de DocumentModel al de la Entidad.
+    // Esto permite que métodos customizados en tu `ObreroEntity` o `AdelantoEntity`
+    // sigan funcionando perfectamente en los resultados de las consultas.
+    Object.setPrototypeOf(DocumentModel.prototype, entityClass.prototype);
+
+    return DocumentModel as unknown as Model<T>;
 }

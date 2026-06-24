@@ -1,4 +1,4 @@
-import { Body, Controller, HttpCode, HttpStatus, Injectable, NotFoundException, Param, Post, UsePipes, ValidationPipe } from "@nestjs/common";
+import { Body, Controller, Get, HttpCode, HttpStatus, Injectable, NotFoundException, Param, Post, UsePipes, ValidationPipe } from "@nestjs/common";
 import { Logger } from "@nestjs/common";
 import { InjectModel, Model } from "@sheetOdm/core/model/model.factory";
 import { CreateObreroDto, ObreroEntity } from "./obrero.entity";
@@ -13,49 +13,62 @@ export class PlanillaTareoService {
         @InjectModel(AdelantoEntity) private readonly adelantoModel: Model<AdelantoEntity>,
     ) { }
 
-    async createObrero(dto: CreateObreroDto): Promise<ObreroEntity> {
-        this.logger.log(`Intentando persistir obrero con DNI: ${dto.dni}`);
+    // ========================================================================
+    // INSERCIONES
+    // ========================================================================
 
-        // 1. Verificación en Postgres (Rápida)
-        const existingUser = await this.obreroModel.findOne({ dni: dto.dni });
-        if (existingUser) {
-            throw new Error(`El obrero con DNI ${dto.dni} ya existe.`);
-        }
-
-        // 2. Guardado en Postgres
-        // Al instanciar el modelo, el ODM debería manejar la persistencia en DB 
-        // y emitir el evento para que Google Sheets se sincronice asíncronamente.
-        const nuevoObrero = new this.obreroModel(dto);
-        return await nuevoObrero.save();
-    }
-    async crearObreroConAdelantos(data: CreateObreroDto & { adelantos?: CreateAdelantoDto[] }): Promise<ObreroEntity> {
-        this.logger.log(`Registrando nuevo obrero con ${data.adelantos?.length || 0} adelantos iniciales.`);
-
-        // Mapeamos o casteamos el objeto para cumplir con la firma estricta del Modelo de tu ODM
-        const payload: Partial<ObreroEntity> = {
-            ...data,
-            adelantos: data.adelantos as AdelantoEntity[] // Forzamos el casteo ya que el MutationEngine asignará los IDs generados
+    async createObrero(dto: CreateObreroDto) {
+        this.logger.debug(`[FLOW-1] DTO Entrante: ${JSON.stringify(dto)}`);
+        // Usando el método estático save del Active Record refactorizado
+        const nuevoObrero = await this.obreroModel.save(dto);
+        return {
+            message: 'Obrero registrado exitosamente en la hoja',
+            data: nuevoObrero.toJSON() // toJSON() limpia los metadatos internos
         };
-
-        const nuevoObrero = await this.obreroModel.save(payload);
-        return nuevoObrero;
     }
-    async registrarAdelantoDiario(idObrero: string, dto: CreateAdelantoDto): Promise<AdelantoEntity> {
-        this.logger.log(`Buscando obrero con ID ${idObrero} para asignarle un adelanto de S/. ${dto.monto}`);
 
-        // 🚀 CORRECCIÓN CRÍTICA: Se debe buscar en obreroModel, no en adelantoModel
+    async createAdelanto(idObrero: string, dto: CreateAdelantoDto) {
+        // Validación opcional: verificar que el obrero existe en la base (Sheets)
         const obrero = await this.obreroModel.findOne({ id: idObrero });
         if (!obrero) {
-            throw new NotFoundException(`El obrero con ID ${idObrero} no existe.`);
+            throw new NotFoundException(`Obrero con ID ${idObrero} no existe.`);
+        }
+        const { idObrero: _, ...dataSinObrero } = dto;
+
+        // Forzamos la relación inyectando el idObrero desde el parámetro de la ruta
+        const nuevoAdelanto = await this.adelantoModel.save({
+            ...dataSinObrero,
+            idObrero: idObrero
+        });
+
+        return {
+            message: 'Adelanto asignado correctamente',
+            data: nuevoAdelanto.toJSON()
+        };
+    }
+
+    // ========================================================================
+    // CONSULTAS
+    // ========================================================================
+
+    async findAllObreros() {
+        // Retorna todos los obreros (sin relaciones pobladas)
+        const obreros = await this.obreroModel.find();
+        return obreros.map(obrero => obrero.toJSON());
+    }
+
+    async findObreroConAdelantos(idObrero: string) {
+        // Usamos el query option `populate` que configuraste para las SubCollections
+        const obreroCompleto = await this.obreroModel.findOne(
+            { id: idObrero },
+            { populate: 'adelantos' } // Debe hacer match con la propiedad @SubCollection
+        );
+
+        if (!obreroCompleto) {
+            throw new NotFoundException(`Obrero con ID ${idObrero} no encontrado.`);
         }
 
-        // Insertamos el adelanto directo vinculándolo a través de la relación explícita
-        const nuevoAdelanto = await this.adelantoModel.save({
-            ...dto,
-            idObrero: obrero.id
-        } as Partial<AdelantoEntity>); // Casteo seguro para el ODM
-
-        return nuevoAdelanto;
+        return obreroCompleto.toJSON();
     }
 
 }
@@ -65,41 +78,31 @@ export class PlanillaTareoService {
 export class PlanillaAdminController {
     constructor(private readonly planillaService: PlanillaTareoService) { }
 
-    @Post('obrero')
-    @HttpCode(HttpStatus.CREATED)
-    @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true })) // 👈 Habilita la validación
-    async createObrero(@Body() createDto: CreateObreroDto) {
-        // Ahora 'createDto' ya está validado, si falta un campo, Nest devuelve 400 Bad Request
-        return await this.planillaService.createObrero(createDto);
+    // 1. Inserción de una sola entidad
+    @Post()
+    createObrero(@Body() createObreroDto: CreateObreroDto) {
+        return this.planillaService.createObrero(createObreroDto);
     }
 
-    /**
-     * POST /admin-planilla/obrero-con-adelantos
-     * Inserta un Obrero en la pestaña 'OBREROS' y automáticamente pobla 
-     * sus adelantos iniciales en la pestaña 'ADELANTOS_DIARIOS'
-     */
-    @Post('obrero-con-adelantos')
-    @HttpCode(HttpStatus.CREATED)
-    // El ValidationPipe procesará las validaciones anidadas si configuraste @ValidateNested() en el DTO
-    @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
-    async crearObreroConAdelantos(
-        @Body() data: CreateObreroDto & { adelantos?: CreateAdelantoDto[] }
-    ) {
-        return await this.planillaService.crearObreroConAdelantos(data);
-    }
-
-    /**
-     * POST /admin-planilla/obrero/:idObrero/adelanto
-     * Registra un adelanto diario directamente a un obrero existente pasándole su ID por parámetro
-     */
-    @Post('obrero/:idObrero/adelanto')
-    @HttpCode(HttpStatus.CREATED)
-    @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
-    async registrarAdelantoDiario(
-        @Param('idObrero') idObrero: string,
+    // 2. Inserción de entidad relacionada
+    @Post(':id/adelantos')
+    createAdelanto(
+        @Param('id') idObrero: string,
         @Body() createAdelantoDto: CreateAdelantoDto
     ) {
-        return await this.planillaService.registrarAdelantoDiario(idObrero, createAdelantoDto);
+        return this.planillaService.createAdelanto(idObrero, createAdelantoDto);
+    }
+
+    // 3. Consulta de una sola entidad (Lista)
+    @Get()
+    findAll() {
+        return this.planillaService.findAllObreros();
+    }
+
+    // 4. Consulta de entidades relacionadas (Populate)
+    @Get(':id/full')
+    findObreroFull(@Param('id') idObrero: string) {
+        return this.planillaService.findObreroConAdelantos(idObrero);
     }
 
 

@@ -15,36 +15,14 @@ export class PostgresOutboxService extends OutboxService {
     async saveTransaction(entries: OutboxEntry[]): Promise<void> {
         if (!entries || entries.length === 0) return;
 
-        const tableName = 'outbox_entries';
-
-        // Mapeo explícito a las columnas snake_case de PostgreSQL
-        const columns = [
-            'entity_name',
-            'operation',
-            'status',
-            'sheet_name',
-            'payload',
-            'attempts'
-        ];
-
-        const placeholders: string[] = [];
+        const columns = ['entity_name', 'operation', 'status', 'sheet_name', 'payload', 'attempts'];
         const values: any[] = [];
-        let colIndex = 1;
+        const placeholders = entries.map((entry, index) => {
+            const baseIndex = index * columns.length;
 
-        // Empaquetamos dinámicamente todos los registros en un solo string SQL
-        for (const entry of entries) {
-            const rowPlaceholders = [
-                `$${colIndex++}`, // entity_name
-                `$${colIndex++}`, // operation
-                `$${colIndex++}`, // status
-                `$${colIndex++}`, // sheet_name
-                `$${colIndex++}`, // payload (JSONB)
-                `$${colIndex++}`, // attempts
-            ];
+            // Obtenemos un array de índices: ['$1, $2, ...', '$7, $8, ...']
+            const rowPlaceholders = columns.map((_, colIndex) => `$${baseIndex + colIndex + 1}`).join(', ');
 
-            placeholders.push(`(${rowPlaceholders.join(', ')})`);
-
-            // Si por alguna razón entry.payload viene vacío, usamos entry.doc como respaldo
             const finalPayload = entry.payload || entry.doc || {};
 
             values.push(
@@ -55,14 +33,12 @@ export class PostgresOutboxService extends OutboxService {
                 typeof finalPayload === 'object' ? JSON.stringify(finalPayload) : finalPayload,
                 entry.attempts || 0
             );
-        }
 
-        const queryText = `
-            INSERT INTO ${tableName} (${columns.join(', ')}) 
-            VALUES ${placeholders.join(', ')}
-        `;
+            return `(${rowPlaceholders})`;
+        }).join(', ');
 
-        // Ejecución bajo una transacción SQL real con control de Pool
+        const queryText = `INSERT INTO outbox_entries (${columns.join(', ')}) VALUES ${placeholders}`;
+
         const client = await this.pg.getClient();
         try {
             await client.query('BEGIN');
@@ -70,10 +46,10 @@ export class PostgresOutboxService extends OutboxService {
             await client.query('COMMIT');
         } catch (error: any) {
             await client.query('ROLLBACK');
-            this.logger.error(`❌ Error al ejecutar saveTransaction en Postgres Outbox: ${error.message}`);
+            this.logger.error(`❌ Error en saveTransaction: ${error.message}`);
             throw error;
         } finally {
-            client.release(); // Devuelve el cliente al pool inmediatamente
+            client.release();
         }
     }
     async enqueue(entry: CreateOutboxEntryDto): Promise<void> {

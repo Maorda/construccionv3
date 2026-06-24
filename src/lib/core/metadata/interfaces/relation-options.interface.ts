@@ -8,5 +8,5 @@ export interface SubCollectionOptions {
     onDelete?: 'CASCADE' | 'SET_NULL' | 'RESTRICT';
     joinColumn?: string;
     localField?: string;
-    cascadeDelete?: boolean;
+
 }

@@ -40,3 +40,8 @@ export enum HookType {
     POST_SAVE = 'postSave'
 }
 
+export const SHEET_ODM_MODULE_OPTIONS = 'SHEET_ODM_MODULE_OPTIONS';
+export const SHEETS_SPREADSHEET_ID = 'sheets:spreadsheet_id';
+
+export const INTERNAL_REPO = Symbol('repository');
+export const INTERNAL_NEW = Symbol('isNew');

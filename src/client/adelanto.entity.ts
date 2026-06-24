@@ -12,7 +12,7 @@ export class CreateAdelantoDto {
     idPlanilla: string;
 
     @IsString()
-    @IsNotEmpty()
+    @IsOptional()
     idObrero: string;
 
     @IsString()

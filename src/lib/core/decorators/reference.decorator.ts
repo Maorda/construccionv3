@@ -23,7 +23,7 @@ export function Reference(arg: (() => ClassType<any>) | ClassType<any>, options?
             isMany: false,              // 👈 Una referencia apunta a UN solo documento
             propertyName,
             joinColumn: inferredJoinColumn,
-            cascadeDelete: false        // Nunca se elimina el objetivo de una referencia
+
         };
 
         // Registro en la lista de relaciones (igual que SubCollection)

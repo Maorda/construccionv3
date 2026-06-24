@@ -34,7 +34,7 @@ import { EqOperator, GtOperator } from './stages/filter.operators';
 import { PostgresProvider } from './adapters/postgres.provider';
 import { GoogleSheetProvider } from './adapters/google-sheet.provider';
 import { GoogleHealthService } from './adapters/health/google-sheet-health.service';
-import { GasService } from './infrastructure/gas/gas.service';
+
 import { SheetDataGateway } from './infrastructure/sheet-api/sheet-data.gateway';
 import { GasQueryGateway } from './infrastructure/gas-web-app/gas-query.gateway';
 import { InfrastructureProvisioner } from './infrastructure/InfrastructureProvisioner';
@@ -46,13 +46,12 @@ import { OdmDiagnosticsService } from './core/diagnostic/odm-diagnostics.service
 import { OdmDiagnosticsController } from './core/diagnostic/odm-diagnostics.controller';
 import { SheetsRepositoryFactory } from './core/repository/sheets-repository.factory';
 import { SheetsRepository } from './core/repository/sheets.repository';
-import { UnitOfWork } from './core/uow/services/unit-of-work.service';
-import { createModel } from './core/model/model.factory';
 import { RepositoryCoreFacade } from './core/repository/repository-core.facade';
-
+import { SheetCacheModule } from './core/cache/cache.module';
+import { createModel } from './core/model/model.factory';
 
 // ============================================================================
-// AGRUPACIONES DE PROVIDERS (Para mantener el decorador Module limpio)
+// AGRUPACIONES DE PROVIDERS (Mantenidas para legibilidad)
 // ============================================================================
 
 const CORE_SHARED_SERVICES: Provider[] = [
@@ -65,7 +64,6 @@ const CORE_SHARED_SERVICES: Provider[] = [
   QueryEngine,
   MutationEngine,
   SheetDocumentHydrator,
-  GasService,
   SheetDataGateway,
   InfrastructureProvisioner,
 ];
@@ -91,12 +89,39 @@ const PIPELINE_STAGES = [
   MatchStage, SortStage, LimitStage, SkipStage, ProjectStage, AddFieldsStage
 ];
 
+// Listado maestro de todos los servicios internos del motor
+const ALL_COMMON_PROVIDERS: Provider[] = [
+  ...INTERNAL_SERVICES,
+  ...CORE_SHARED_SERVICES,
+  ...TRANSFORM_OPERATORS,
+  ...FILTER_OPERATORS,
+  ...PIPELINE_STAGES,
+  {
+    provide: DATA_TRANSFORM_OPERATOR,
+    useFactory: (...operators: any[]) => operators,
+    inject: TRANSFORM_OPERATORS,
+  },
+  {
+    provide: FILTER_OPERATOR,
+    useFactory: (...operators: any[]) => operators,
+    inject: FILTER_OPERATORS,
+  },
+  {
+    provide: PIPELINE_STAGE,
+    useFactory: (...stages: any[]) => stages,
+    inject: PIPELINE_STAGES,
+  },
+];
+
 // ============================================================================
-// DECLARACIÓN DEL MÓDULO
+// DECLARACIÓN DEL MÓDULO (Limpio y puramente Dinámico)
 // ============================================================================
 
 @Global()
-@Module({})
+@Module({
+  imports: [HttpModule],
+  // Dejamos el decorador base al mínimo para evitar inicializaciones prematuras sin contexto
+})
 export class SheetOdmModule implements OnApplicationBootstrap {
   private readonly logger = new Logger('SheetOdm');
   private static hasBootstrapped = false;
@@ -120,7 +145,7 @@ export class SheetOdmModule implements OnApplicationBootstrap {
   }
 
   // ========================================================================
-  // CONFIGURACIÓN ASÍNCRONA (Root)
+  // CONFIGURACIÓN ASÍNCRONA (Root Async)
   // ========================================================================
 
   static forRootAsync(options: SheetOdmModuleAsyncOptions): DynamicModule {
@@ -129,10 +154,10 @@ export class SheetOdmModule implements OnApplicationBootstrap {
     }
 
     return {
-      global: true, // 🚀 Asegura que los providers de forRootAsync sean singletons globales reales
+      global: true,
       module: SheetOdmModule,
       imports: [
-        HttpModule,
+        SheetCacheModule, // 🚀 Única fuente de verdad para la caché global
         UowModule,
         ...(options.imports || []),
         OutboxModule.registerAsync({
@@ -143,11 +168,9 @@ export class SheetOdmModule implements OnApplicationBootstrap {
       ],
       controllers: [OdmDiagnosticsController],
       providers: [
-        // 1. Opciones Async
         { provide: 'DATABASE_OPTIONS', useFactory: options.useFactory, inject: options.inject || [] },
         { provide: SHEET_ODM_OPTIONS, useFactory: options.useFactory, inject: options.inject || [] },
 
-        // 2. Adaptador Postgres
         {
           provide: PostgresProvider,
           useFactory: (opts: SheetOdmModuleOptions) => new PostgresProvider(opts),
@@ -155,37 +178,50 @@ export class SheetOdmModule implements OnApplicationBootstrap {
         },
         { provide: POSTGRES_TOKEN, useExisting: PostgresProvider },
 
-        // 3. Servicios Core
-        ...INTERNAL_SERVICES,
-        ...CORE_SHARED_SERVICES,
-
-        // 4. Operadores de Expresión (Registrados individualmente + Agrupados por Token)
-        ...TRANSFORM_OPERATORS,
-        ...FILTER_OPERATORS,
-        {
-          provide: DATA_TRANSFORM_OPERATOR,
-          useFactory: (...operators: any[]) => operators,
-          inject: TRANSFORM_OPERATORS,
-        },
-        {
-          provide: FILTER_OPERATOR,
-          useFactory: (...operators: any[]) => operators,
-          inject: FILTER_OPERATORS,
-        },
-
-        // 5. Stages del Pipeline
-        ...PIPELINE_STAGES,
-        {
-          provide: PIPELINE_STAGE,
-          useFactory: (...stages: any[]) => stages,
-          inject: PIPELINE_STAGES,
-        },
+        ...ALL_COMMON_PROVIDERS, // 📦 Inyecta todos los motores y pasarelas de golpe
       ],
       exports: [
         UowModule,
         OutboxModule,
         PostgresProvider,
         POSTGRES_TOKEN,
+        SheetCacheModule,
+        ...CORE_SHARED_SERVICES,
+      ],
+    };
+  }
+
+  // ========================================================================
+  // CONFIGURACIÓN SÍNCRONA (Root Sync) -> ¡Ahora sí es simétrico!
+  // ========================================================================
+
+  static forRoot(options: SheetOdmModuleOptions): DynamicModule {
+    return {
+      global: true,
+      module: SheetOdmModule,
+      imports: [
+        SheetCacheModule,
+        UowModule,
+      ],
+      controllers: [OdmDiagnosticsController],
+      providers: [
+        { provide: 'DATABASE_OPTIONS', useValue: options },
+        { provide: SHEET_ODM_OPTIONS, useValue: options },
+
+        {
+          provide: PostgresProvider,
+          useFactory: (opts: SheetOdmModuleOptions) => new PostgresProvider(opts),
+          inject: [SHEET_ODM_OPTIONS],
+        },
+        { provide: POSTGRES_TOKEN, useExisting: PostgresProvider },
+
+        ...ALL_COMMON_PROVIDERS, // 📦 Los mismos servicios que la versión Async
+      ],
+      exports: [
+        UowModule,
+        PostgresProvider,
+        POSTGRES_TOKEN,
+        SheetCacheModule,
         ...CORE_SHARED_SERVICES,
       ],
     };
@@ -201,12 +237,11 @@ export class SheetOdmModule implements OnApplicationBootstrap {
 
       const repositoryToken = `SheetsRepository_${entity.name}`;
 
-      // 🚀 2. Mira lo limpio que queda ahora el Factory del Repositorio
       const repositoryProvider: Provider = {
         provide: repositoryToken,
         useFactory: (coreFacade: RepositoryCoreFacade) =>
           new SheetsRepository(entity as any, coreFacade),
-        inject: [RepositoryCoreFacade], // Solo 1 inyección
+        inject: [RepositoryCoreFacade],
       };
 
       const modelProvider: Provider = {

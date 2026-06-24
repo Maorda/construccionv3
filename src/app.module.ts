@@ -8,10 +8,20 @@ import { ModuleRef } from '@nestjs/core';
 import { InfrastructureProvisioner } from './lib/infrastructure/InfrastructureProvisioner';
 import { TestInfrastructureModule } from './client/cliente.module';
 import { OutboxModule } from '@sheetOdm/core/outbox/outbox.module';
+import { configLoader } from '../configLoader';
+import { envValidationSchema } from '../env.validation';
 
 @Module({
     imports: [
-        ConfigModule.forRoot({ isGlobal: true }),
+        ConfigModule.forRoot({
+            isGlobal: true,
+            load: [configLoader],                  // Carga tus variables personalizadas
+            validationSchema: envValidationSchema, // 🛡️ Bloquea el arranque si falta algo del .env
+            validationOptions: {
+                allowUnknown: true, // Permite que existan otras variables en el .env sin que Joi lance error
+                abortEarly: false,  // Muestra TODOS los errores a la vez, no solo el primero
+            }
+        }),
 
         SheetOdmModule.forRootAsync({
             imports: [ConfigModule],
@@ -32,6 +42,8 @@ import { OutboxModule } from '@sheetOdm/core/outbox/outbox.module';
                 },
                 googleDriveBaseFolderId: config.get<string>('GOOGLE_FOLDER_ID')!,
                 spreadsheetId: config.get<string>('SPREADSHEET_ID')!, // ✅ Corregido a camelCase
+                webAppUrl: config.get<string>('GAS_WEBAPP_URL')!,
+                apiKey: config.get<string>('GAS_API_KEY')!,
                 checkConnectionOnBoot: true,
                 timezone: config.get<string>('TIMEZONE') || 'UTC',
                 formatDates: config.get<boolean>('FORMAT_DATES') || false, // ✅ Corregido a camelCase
