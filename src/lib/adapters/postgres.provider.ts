@@ -9,7 +9,7 @@ export class PostgresProvider implements IPostgresProvider, OnApplicationBootstr
     private pool!: Pool;
 
     constructor(
-        private config: SheetOdmModuleOptions,
+        @Inject(SHEET_ODM_OPTIONS) private readonly config: SheetOdmModuleOptions,
     ) { }
 
     // Inicializamos la conexión automáticamente al arrancar NestJS
@@ -51,8 +51,8 @@ export class PostgresProvider implements IPostgresProvider, OnApplicationBootstr
 
             // 3. Crear índices (si no existen)
             await this.pool.query(`
-                CREATE INDEX IF NOT EXISTS idx_outbox_processor_status 
-                ON outbox_entries (status, created_at ASC);
+                CREATE INDEX IF NOT EXISTS idx_outbox_processor_retry 
+                ON outbox_entries (status, next_attempt_at ASC);
             `);
 
             // AGREGAR: Nueva tabla para diagnósticos de lectura
@@ -109,6 +109,7 @@ export class PostgresProvider implements IPostgresProvider, OnApplicationBootstr
             database: pgConfig.database,
             ssl: pgConfig.ssl ? { rejectUnauthorized: false } : false,
             idleTimeoutMillis: 30000,
+            max: 20,
         });
 
         // Verificación de conexión rápida

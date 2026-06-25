@@ -1,8 +1,7 @@
-import { Inject, Logger } from '@nestjs/common';
+import { Logger } from '@nestjs/common';
 import { MetadataRegistry } from '../metadata/metadata.registry';
 import { DataSourceManager } from '../data-source-manager';
 import { UnitOfWork } from '../uow/services/unit-of-work.service';
-
 import { ClassType } from '../types/common.types';
 import { ROW_INDEX_SYMBOL } from '../../shared/constants/constants';
 import { TypeOp } from '../outbox/interfaces/outbox-entry.interface';
@@ -11,13 +10,8 @@ import { SheetDocumentHydrator } from '../base/sheet-document-hydrator';
 import { FilterQuery, FindOneAndUpdateOptions, QueryOptions, UpdateQuery } from '../model/model.factory';
 import { QueryEngine } from '../query/query.engine';
 import { MutationEngine } from '../engine/mutationEngine';
-
-import { SheetDataGateway } from '../../infrastructure/sheet-api/sheet-data.gateway';
-import { SheetDataTransformer } from '../base/sheetDataTransformer';
 import { PopulateEngine } from '../engine/populate.engine';
 import { RepositoryCoreFacade } from './repository-core.facade';
-import { ISheetReadDriver } from '../../infrastructure/gas-web-app/gas-query.gateway';
-import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Cache } from 'cache-manager';
 import { CacheKeys } from '../cache/cache.keys';
 import { IdFactory } from '@sheetOdm/shared/id.generator';
@@ -29,17 +23,9 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
     private readonly metadata: MetadataRegistry;
     private readonly dataSource: DataSourceManager;
     private readonly uow: UnitOfWork;
-    private readonly hydrator: SheetDocumentHydrator;
     private readonly queryEngine: QueryEngine;
     private readonly mutationEngine: MutationEngine;
-
-    private readonly writeGateway: SheetDataGateway; // Google APIs para escrituras
-    private readonly readGateway: ISheetReadDriver;  // GAS para lecturas indexadas (NUEVO)
-
-    private readonly gateway: SheetDataGateway;
-    private readonly transformer: SheetDataTransformer;
     private readonly populateEngine: PopulateEngine;
-    private readonly metaDataRegistry: MetadataRegistry;
     private readonly cacheManager: Cache;
 
     constructor(
@@ -51,18 +37,8 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
         this.metadata = core.metadata;
         this.dataSource = core.dataSource;
         this.uow = core.uow;
-        this.hydrator = core.hydrator;
         this.queryEngine = core.queryEngine;
         this.mutationEngine = core.mutationEngine;
-
-        // Separación explícita de carriles CQRS
-        this.writeGateway = core.gateway;
-        this.readGateway = core.readGateway;
-
-        // 🔥 SOLUCIÓN: Asigna el gateway original para mantener la compatibilidad con tus métodos de escritura
-        this.gateway = core.gateway;
-
-        this.transformer = core.transformer;
         this.populateEngine = core.populateEngine;
         this.cacheManager = core.cacheManager;
         this.sheetName = this.metadata.getSchema(this.entityClass).sheetName;
@@ -85,16 +61,18 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
             const columnName = (colConfig?.name || propertyName).toUpperCase();
 
             try {
-                // 🚀 Usamos el nuevo readGateway
-                const rawData = await this.readGateway.findOne<any>(this.sheetName, columnName, searchValue);
+                // ✅ El DSM orquesta y ejecuta con su propia resiliencia/reintentos
+                const rawData = await this.dataSource.executeWithRetry(
+                    () => this.dataSource.readFindOne<any>(this.sheetName, columnName, searchValue),
+                    `Indexed FindOne [${this.sheetName}]`
+                );
 
                 if (rawData) {
-                    this.logger.debug(`[Cache Hit - Read Gateway] Registro encontrado en ${this.sheetName}`);
                     return this.hydrateAndCacheRawResult<U>(rawData, options);
                 }
                 return null;
             } catch (error: any) {
-                this.logger.warn(`[Fallback] Lectura indexada falló en findOne. Error: ${error.message}`);
+                this.logger.warn(`[Fallback] Lectura indexada falló en findOne (${error.message}). Escaneando caché/completo...`);
             }
         }
 
@@ -117,8 +95,10 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
             const columnName = (colConfig?.name || propertyName).toUpperCase();
 
             try {
-                // 🚀 Usamos el nuevo readGateway
-                const rawArray = await this.readGateway.findMany<any>(this.sheetName, columnName, searchValue);
+                const rawArray = await this.dataSource.executeWithRetry(
+                    () => this.dataSource.readFindMany<any>(this.sheetName, columnName, searchValue),
+                    `Indexed FindMany [${this.sheetName}]`
+                );
 
                 if (rawArray && rawArray.length > 0) {
                     const processedItems = await this.queryEngine.execute(rawArray, safeFilter, options);
@@ -126,7 +106,7 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
                 }
                 return [];
             } catch (error: any) {
-                this.logger.warn(`[Fallback] Lectura indexada falló (${error.message}). Pasando a escaneo completo...`);
+                this.logger.warn(`[Fallback] Lectura indexada masiva falló. Pasando a escaneo total...`);
             }
         }
 
@@ -134,6 +114,7 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
         const processedItems = await this.queryEngine.execute(rawItems, safeFilter, options);
         const instances = processedItems.map(raw => this.hydrateAndCacheRawResult<U>(raw, options));
 
+        // Pestaña a Pestaña: Si requiere populate, el engine cruzará los registros con la pestaña hija
         if (options?.populate && instances.length > 0) {
             await this.populateEngine.populate<T, U>(
                 instances,
@@ -179,6 +160,7 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
      */
     async aggregate<R = any>(pipeline: any[]): Promise<R[]> {
         try {
+            // Ahora consume el método refactorizado limpio
             const rawItems = await this.fetchRawData(false);
             return await this.queryEngine.aggregate(rawItems, pipeline) as R[];
         } catch (error: any) {
@@ -191,86 +173,68 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
      * 📝 GUARDAR (UoW o Directo)
      */
     async save(doc: SheetDocument<T>): Promise<SheetDocument<T>> {
-        this.logger.debug(`[FLOW-4] Objeto antes de serializar (Keys): ${Object.keys(doc)}`);
+        // Guardrail defensivo de prototipos antes de extraer propiedades
+        if (!doc || typeof doc.getPrimaryKeyValue !== 'function') {
+            throw new Error(`[OdmError] Estructura inválida. El objeto no hereda de SheetDocument.`);
+        }
+
         const pkField = this.getPrimaryKeyField();
         const pk = doc.getPrimaryKeyValue(pkField as keyof T);
-        // Verificar si el método existe antes de llamarlo
-        if (typeof (doc as any).getPrimaryKeyValue !== 'function') {
-            this.logger.error(`[FLOW-ERROR] ¡Error de prototipo! El objeto no tiene getPrimaryKeyValue`);
-        }
         const rowIndex = doc.rowNumber;
         const isNew = rowIndex === undefined;
         const operation: TypeOp = isNew ? TypeOp.INSERT : TypeOp.UPDATE;
 
-        // 1. Obtenemos el payload completo (Padre + posibles hijos anidados)
         const rawPayload = doc.toJSON() as any;
         const payload = { ...rawPayload };
         if (rowIndex !== undefined) {
             payload._row = rowIndex;
         }
 
-        // 2. Arreglo para almacenar las mutaciones de los hijos extraídos
         const childMutations: { entityClass: ClassType<any>; payload: any; operation: TypeOp }[] = [];
-
-        // 3. 🔍 INSPECCIÓN DE METADATOS: Buscamos las SubColecciones
         const relations = this.metadata.getCompiledRelations(this.entityClass);
 
+        // 🔀 DISEÑO TAB-TO-TAB: Procesamiento estricto de subcolecciones como pestañas independientes
         for (const rel of relations) {
-            // Si es subcolección y los datos vinieron en el JSON...
             if (rel.type === 'subcollection' && payload[rel.propertyName]) {
                 const childrenArray = payload[rel.propertyName];
 
                 if (Array.isArray(childrenArray)) {
                     const TargetEntityClass = rel.targetEntity();
-
-                    // Obtenemos la columna foránea (ej. idObrero)
                     const joinColName = rel.joinColumn || `${this.entityClass.name.toLowerCase()}Id`;
 
                     for (const child of childrenArray) {
-                        // 💉 MAGIA: Inyectamos automáticamente el ID del padre en el hijo
-                        child[joinColName] = pk;
-
+                        child[joinColName] = pk; // Inyectar id del padre en la fila de la pestaña hija
                         childMutations.push({
                             entityClass: TargetEntityClass,
                             payload: child,
-                            // Si el hijo no tiene _row, es un INSERT, si no, es UPDATE
                             operation: child._row === undefined ? TypeOp.INSERT : TypeOp.UPDATE
                         });
                     }
                 }
-
-                // 🧹 CRÍTICO: Borramos el array del payload del padre. 
-                // Esto evita que intentemos guardar un Array en una celda de Sheets.
+                // 🧹 Sanitización: Borramos el array para que no intente guardarse en una celda de la pestaña padre
                 delete payload[rel.propertyName];
             }
         }
 
-        // =========================================================
-        // 4. DESPACHO TRANSACCIONAL (UoW)
-        // =========================================================
+        // 🏢 FLUJO A: DESPACHO TRANSACCIONAL (Unit of Work)
         if (this.uow.hasActiveTransaction()) {
-            // A. Encolar al padre limpio
             this.uow.queueOperation({
                 type: operation,
                 entityClass: this.entityClass,
                 sheetName: this.sheetName,
-                // 🔥 SOLUCIÓN: Pasamos el objeto plano directamente
-                doc: rawPayload,
+                doc: payload,
                 pk: pk
             });
 
-            // B. Encolar a todos los hijos extraídos
             for (const childMut of childMutations) {
-                const childPkField = this.metadata.getPrimaryKeyField(childMut.entityClass);
-                const childPk = childMut.payload[childPkField];
                 const childSheetName = this.metadata.getSchema(childMut.entityClass).sheetName;
+                const childPkField = this.metadata.getPrimaryKeyField(childMut.entityClass);
                 this.uow.queueOperation({
                     type: childMut.operation,
                     entityClass: childMut.entityClass,
                     sheetName: childSheetName,
-                    // 🔥 SOLUCIÓN: Pasamos el payload del hijo directamente
                     doc: childMut.payload,
-                    pk: childPk
+                    pk: childMut.payload[childPkField]
                 });
             }
 
@@ -278,29 +242,11 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
             return doc;
         }
 
-        // =========================================================
-        // 5. DESPACHO DIRECTO (Sin UoW)
-        // =========================================================
-        // A. Despachamos al padre
-        // const serializedPayload = this.metadata.serialize(rawPayload, this.entityClass);
+        // ⚡ FLUJO B: DESPACHO DIRECTO AL DSM (Postgres Outbox / Concurrente)
+        await this.dataSource.dispatchMutation(this.entityClass, operation, payload, payload);
 
-        await this.dataSource.dispatchMutation(
-            this.entityClass,
-            operation,
-            rawPayload,
-            rawPayload
-        );
-
-        // B. Despachamos a los hijos como tareas independientes a la Outbox
         for (const childMut of childMutations) {
-            // const serializedChild = this.metadata.serialize(childMut.payload, childMut.entityClass);
-
-            await this.dataSource.dispatchMutation(
-                childMut.entityClass,
-                childMut.operation,
-                childMut.payload,
-                childMut.payload
-            );
+            await this.dataSource.dispatchMutation(childMut.entityClass, childMut.operation, childMut.payload, childMut.payload);
         }
 
         return doc;
@@ -310,7 +256,7 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
      * 🗑️ ELIMINAR
      */
     async delete(doc: U): Promise<boolean> {
-        const pk = (doc as any)[this.getPrimaryKeyField()];
+        const pk = doc.getPrimaryKeyValue(this.getPrimaryKeyField() as keyof T);
 
         if (this.uow.hasActiveTransaction()) {
             this.uow.queueOperation({
@@ -331,24 +277,15 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
      * 🆕 CREAR INSTANCIA
      */
     create(data: Partial<T>): U {
-        // 1. Simplificación de la lógica del ID
-        const generatedId = (data as any).id || IdFactory.createShort() || Math.random().toString(36).substring(2, 10).toUpperCase();
+        const generatedId = (data as any).id || IdFactory.createShort();
 
         const payload = {
             ...data,
             id: generatedId
         };
 
-        // 2. Hydratamos y hacemos el casting explícito a U
-        // El "as U" le dice al compilador que deje de preocuparse.
-        const instance = this.hydrator.hydrateAndShield(
-            this.entityClass,
-            this,
-            payload,
-            { new: true }
-        ) as U;
-
-        // 3. Guardamos en el Store centralizado
+        // Instanciamos el documento pasándole 'this' (el repositorio) para activar el patrón Active Record
+        const instance = new (this.entityClass as any)(payload, this, true) as U;
         EntityStore.set(instance as any, payload);
 
         return instance;
@@ -358,31 +295,24 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
     // HELPERS INTERNOS
     // ====================================================================
 
-    protected hydrateAndCacheRawResult<Ret extends U = U>(
-        rawObject: any,
-        options?: QueryOptions<T>
-    ): Ret {
+    private hydrateAndCacheRawResult<Ret extends U = U>(rawObject: any, options?: QueryOptions<T>): Ret {
         if (rawObject._row !== undefined && rawObject._row !== null) {
             rawObject[ROW_INDEX_SYMBOL] = rawObject._row;
             delete rawObject._row;
         }
 
-        const pkField = this.getPrimaryKeyField();
-        const pkValue = rawObject[pkField];
+        const pkValue = rawObject[this.getPrimaryKeyField()];
 
         if (options?.lean) {
-            return this.instantiateDocument<Ret>(rawObject, options);
+            return new (this.entityClass as any)(rawObject, this, false) as Ret;
         }
 
-        // 🌟 Corregido: this.uow en lugar de this.unitOfWork
         if (pkValue) {
             const existingDoc = this.uow.get(pkValue, this.entityClass);
-            if (existingDoc) {
-                return existingDoc as Ret;
-            }
+            if (existingDoc) return existingDoc as Ret;
         }
 
-        const doc = this.instantiateDocument<Ret>(rawObject, options);
+        const doc = new (this.entityClass as any)(rawObject, this, false) as Ret;
 
         if (pkValue) {
             this.uow.register(doc, pkValue, this.entityClass);
@@ -391,28 +321,9 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
         return doc;
     }
 
-    private instantiateDocument<Ret extends U>(
-        rawObject: any,
-        options?: QueryOptions<T>
-    ): Ret {
-        let doc: SheetDocument<T>;
-
-        try {
-            if (options?.customConstructor) {
-                doc = new options.customConstructor(rawObject, this, false);
-                doc.markAsSaved(rawObject[ROW_INDEX_SYMBOL]);
-
-                const version = rawObject.version !== undefined ? parseInt(rawObject.version, 10) : 0;
-                doc.setVersion(version);
-            } else {
-                doc = this.hydrator.hydrateAndShield(this.entityClass, this, rawObject);
-            }
-
-            return doc as Ret;
-        } catch (error: any) {
-            this.logger.error(`[Hydrator] Error crítico al instanciar registro en '${this.sheetName}'. Detalles: ${error.message}`);
-            throw new Error(`Fallo estructural al hidratar la entidad ${this.entityClass.name}.`);
-        }
+    async clearRepositoryCache(): Promise<void> {
+        await this.cacheManager.del(this.getCacheKey());
+        this.logger.debug(`[Cache Purged] Memoria invalidada para la pestaña: ${this.sheetName}`);
     }
 
     protected async fetchRawData(includeInactive = false): Promise<any[]> {
@@ -425,39 +336,26 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
             return cachedData;
         }
 
-        // 2. Fallback a Google Sheets (GateWay)
-        this.logger.debug(`[Cache Miss] Escaneando hoja: ${this.sheetName}`);
-        const bounds = await this.gateway.getBoundaries(this.sheetName);
-        const colLetter = String.fromCharCode(64 + bounds.lastColumn);
-        const perfectRange = `${this.sheetName}!A1:${colLetter}${bounds.lastRow}`;
-        const allRows = await this.gateway.getRange(perfectRange);
+        // 2. Fallback al DataSourceManager (La lógica de rangos y letras ya no vive aquí)
+        this.logger.debug(`[Cache Miss] Solicitando filas crudas al DSM para: ${this.sheetName}`);
 
-        if (!allRows || allRows.length === 0) return [];
+        let items = await this.dataSource.readFindAll<any>(this.sheetName);
 
-        const headers = allRows[0].map((h: any) => String(h).trim().toUpperCase());
-        const dataRows = allRows.slice(1);
+        // Protección por si el DSM devuelve nulo
+        if (!items) {
+            items = [];
+        }
+
+        // 3. Aplicar Soft-Delete (Lógica de Negocio)
         const schema = this.metadata.getSchema(this.entityClass);
-
-        let items = dataRows.map((row, index) => {
-            const plainObject: any = {};
-            plainObject[ROW_INDEX_SYMBOL] = index + 2;
-
-            for (const prop of Object.keys(schema.columns)) {
-                const colConfig = schema.columns[prop];
-                const headerName = (colConfig.name || prop).toUpperCase();
-                const colIndex = headers.indexOf(headerName);
-                plainObject[prop] = colIndex !== -1 ? row[colIndex] : (colConfig.default ?? null);
-            }
-            return plainObject;
-        });
-
         const deleteControlProp = schema.deleteControl;
-        if (deleteControlProp && !includeInactive) {
+
+        if (deleteControlProp && !includeInactive && items.length > 0) {
             items = items.filter(item => !item[deleteControlProp]);
         }
 
-        // 3. Guardar en caché (TTL configurable, ej: 5 min)
-        await this.cacheManager.set(cacheKey, items, 300000);
+        // 4. Guardar en caché delegando el TTL al módulo global
+        await this.cacheManager.set(cacheKey, items);
 
         return items;
     }
@@ -490,7 +388,6 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
     private canUseIndexedRead(filter?: FilterQuery<T>, options?: QueryOptions<T>): boolean {
         if (!filter || Object.keys(filter).length !== 1) return false;
         if (options?.sort) return false;
-
         const value = Object.values(filter)[0];
         return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
     }
@@ -500,146 +397,93 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
     }
 
 
-    private async processDeletes(docs: any[]): Promise<void> {
-        const deleteControlProp = this.metadata.getDeleteControlProperty(this.entityClass);
-        const hardDeleteRanges: string[] = [];
-        const softDeleteDocs: SheetDocument<T>[] = [];
-
-        for (const doc of docs) {
-            const rowIndex = doc[ROW_INDEX_SYMBOL];
-            if (deleteControlProp) {
-                // Soft delete: Actualizar celda a true y encolar el documento
-                doc[deleteControlProp] = true;
-                if (doc.version !== undefined && typeof doc.setVersion === 'function') {
-                    doc.setVersion(doc.version + 1);
-                }
-                softDeleteDocs.push(doc as SheetDocument<T>);
-            } else {
-                // Hard delete: Limpiar fila
-                hardDeleteRanges.push(`${this.sheetName}!${rowIndex}:${rowIndex}`);
-            }
-        }
-
-        // Ejecutamos Hard Deletes
-        if (hardDeleteRanges.length > 0) {
-            await this.gateway.batchClearValues(hardDeleteRanges);
-        }
-
-        // Ejecutamos Soft Deletes utilizando nuestro builder empresarial
-        if (softDeleteDocs.length > 0) {
-            const softDeleteUpdates = this.buildGoogleBatchRequests(softDeleteDocs);
-            await this.gateway.batchUpdateValues(softDeleteUpdates);
-        }
-    }
-
-    private async processUpdates(docs: any[]): Promise<void> {
-        // 1. Incremento de versión (Optimistic Locking) antes de serializar
-        docs.forEach(doc => {
-            if (doc.version !== undefined && typeof doc.setVersion === 'function') {
-                doc.setVersion(doc.version + 1);
-            }
-        });
-
-        // 2. Construcción de la petición usando el método empresarial
-        // Hacemos el cast a SheetDocument<T>[] ya que provienen de commitBulk como any[]
-        const payloads = this.buildGoogleBatchRequests(docs as SheetDocument<T>[]);
-
-        // 3. Ejecución contra el Gateway
-        if (payloads.length > 0) {
-            await this.gateway.batchUpdateValues(payloads);
-        }
-    }
-
     private async processInserts(docs: SheetDocument<T>[]): Promise<void> {
         if (!docs || docs.length === 0) return;
 
-        const schema = this.metadata.getSchema(this.entityClass);
-        const versionField = this.metadata.getVersionField(this.entityClass);
+        await Promise.all(docs.map(async (doc) => {
+            const payload = doc.toJSON();
+            const rawRowValues = this.metadata.serialize(doc as unknown as T, this.entityClass);
 
-        // 1. Convertimos los documentos a la matriz exacta que espera Google Sheets
-        const rowsToInsert: any[][] = docs.map(doc => {
-            // 🔥 ESTA ES LA CLAVE: Usamos el serializador del MetadataRegistry
-            return this.metadata.serialize(doc as unknown as T, this.entityClass);
-        });
+            await this.dataSource.dispatchMutation(
+                this.entityClass,
+                'INSERT' as TypeOp, // Ajusta a tu enum: ej. TypeOp.INSERT
+                payload,
+                rawRowValues        // El array plano listo para que el trigger haga .appendRow()
+            );
 
-        try {
-            this.logger.debug('PAYLOAD A ENVIAR A GOOGLE:', JSON.stringify(rowsToInsert, null, 2));
-            const insertedRowNumbers = await this.gateway.appendRows(this.sheetName, rowsToInsert);
-
-            if (insertedRowNumbers && insertedRowNumbers.length === docs.length) {
-                docs.forEach((doc, idx) => {
-                    doc.markAsSaved(insertedRowNumbers[idx]);
-                });
-            }
-        } catch (error: any) {
-            this.logger.error(`Error procesando inserts masivos en ${this.sheetName}: ${error.message}`);
-            throw error;
-        }
+            // 💡 CONVENCIÓN WAL (Write-Ahead Log): 
+            // Como la escritura física es asíncrona, le asignamos un rowIndex temporal de -1 
+            // indicando: "Guardado en Outbox, pendiente de sincronización física".
+            doc.markAsSaved(-1);
+        }));
     }
 
+    private async processUpdates(docs: any[]): Promise<void> {
+        if (!docs || docs.length === 0) return;
 
-    protected async getRawData(includeInactive = false): Promise<Record<string, any>[]> {
-        const cacheKey = this.getCacheKey();
-
-        // 1. Hit de Caché
-        const cachedData = await this.cacheManager.get<Record<string, any>[]>(cacheKey);
-        if (cachedData) {
-            return cachedData;
-        }
-
-        this.logger.debug(`[Cache Miss] Fetching fresh data from: ${this.sheetName}`);
-
-        // 2. Obtener límites de la hoja para construir un rango dinámico y preciso
-        const bounds = await this.gateway.getBoundaries(this.sheetName);
-
-        // Si la hoja está vacía o solo tiene cabeceras (lastRow <= 1)
-        if (bounds.lastRow <= 1) return [];
-
-        // Convertimos el índice de columna a letra (ej: 3 -> 'C')
-        const lastColLetter = this.numberToColumn(bounds.lastColumn);
-        const perfectRange = `${this.sheetName}!A1:${lastColLetter}${bounds.lastRow}`;
-
-        const allRows = await this.gateway.getRange(perfectRange);
-        if (!allRows || allRows.length === 0) return [];
-
-        // 3. Mapeo inteligente usando MetadataRegistry
-        const [headerRow, ...dataRows] = allRows;
-        const schema = this.metadata.getSchema(this.entityClass);
-
-        // Convertimos headers a mayúsculas para comparación insensible a mayúsculas
-        const headers = headerRow.map((h: any) => String(h).trim().toUpperCase());
-
-        const rawCollection: Record<string, any>[] = dataRows.map((row, index) => {
-            const obj: Record<string | symbol, any> = {};
-
-            // Asignamos el índice de fila física (+2 porque sheets es 1-based y saltamos cabecera)
-            obj[ROW_INDEX_SYMBOL] = index + 2;
-
-            // Iteramos sobre las propiedades definidas en el decorador @Column
-            for (const propertyName of Object.keys(schema.columns)) {
-                const colConfig = schema.columns[propertyName];
-                const sheetColumnName = (colConfig.name || propertyName).toUpperCase();
-
-                const colIndex = headers.indexOf(sheetColumnName);
-
-                // Si la columna existe en el sheet, la mapeamos, sino usamos el valor default
-                obj[propertyName] = colIndex !== -1 ? row[colIndex] : (colConfig.default ?? null);
+        await Promise.all(docs.map(async (doc: SheetDocument<T>) => {
+            // 1. Optimistic Locking
+            if (doc.version !== undefined && typeof doc.setVersion === 'function') {
+                doc.setVersion(doc.version + 1);
             }
 
-            return obj;
-        });
+            const payload = doc.toJSON();
+            const rawRowValues = this.metadata.serialize(doc as unknown as T, this.entityClass);
+            const rowIndex = (doc as any)[ROW_INDEX_SYMBOL];
 
-        // 4. Filtrado de registros inactivos (si aplica)
-        let processedData = rawCollection;
-        const deleteControlProp = schema.deleteControl;
-        if (deleteControlProp && !includeInactive) {
-            processedData = processedData.filter(item => !item[deleteControlProp]);
-        }
+            // 🎁 REGALO PARA EL CONSUMIDOR DEL OUTBOX:
+            // Le pasamos el rowIndex físicamente en el rawDoc para que Apps Script 
+            // no tenga que hacer un .find() buscando el ID por toda la hoja.
+            const outboxRawDoc = {
+                rowIndex,
+                values: rawRowValues
+            };
 
-        // 5. Guardamos en caché (5 min TTL)
-        await this.cacheManager.set(cacheKey, processedData, 300000);
+            await this.dataSource.dispatchMutation(
+                this.entityClass,
+                'UPDATE' as TypeOp,
+                payload,
+                outboxRawDoc
+            );
+        }));
+    }
 
-        return processedData;
+    private async processDeletes(docs: any[]): Promise<void> {
+        if (!docs || docs.length === 0) return;
+
+        const deleteControlProp = this.metadata.getDeleteControlProperty(this.entityClass);
+
+        await Promise.all(docs.map(async (doc: SheetDocument<T>) => {
+            const rowIndex = (doc as any)[ROW_INDEX_SYMBOL];
+
+            if (deleteControlProp) {
+                // --- 🟡 SOFT DELETE (Físicamente es un UPDATE) ---
+                doc[deleteControlProp as keyof SheetDocument<T>] = true as any;
+                if (doc.version !== undefined && typeof doc.setVersion === 'function') {
+                    doc.setVersion(doc.version + 1);
+                }
+
+                const payload = doc.toJSON();
+                const rawRowValues = this.metadata.serialize(doc as unknown as T, this.entityClass);
+
+                await this.dataSource.dispatchMutation(
+                    this.entityClass,
+                    'UPDATE' as TypeOp, // Despachamos un UPDATE porque Sheets solo actualizará la celda
+                    payload,
+                    { rowIndex, values: rawRowValues }
+                );
+            } else {
+                // --- 🔴 HARD DELETE (Físicamente destruir la fila) ---
+                const payload = doc.toJSON();
+
+                await this.dataSource.dispatchMutation(
+                    this.entityClass,
+                    'DELETE' as TypeOp,
+                    payload,
+                    { rowIndex } // Al trigger de borrado solo le interesa saber el número de fila
+                );
+            }
+        }));
     }
 
     /**
@@ -655,26 +499,5 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
         return letter;
     }
 
-    private buildGoogleBatchRequests(documents: SheetDocument<T>[]): { range: string, values: any[][] }[] {
-        const requests: { range: string, values: any[][] }[] = [];
-        const schema = this.metadata.getSchema(this.entityClass);
 
-        documents.forEach(doc => {
-            const rowIndex = (doc as any)[ROW_INDEX_SYMBOL];
-            if (!rowIndex) return;
-
-            // 🔥 USAMOS EL SERIALIZADOR: Devuelve el array en el orden correcto
-            const rowData = this.metadata.serialize(doc as unknown as T, this.entityClass);
-
-            const lastCol = this.numberToColumn(rowData.length);
-            const range = `${this.sheetName}!A${rowIndex}:${lastCol}${rowIndex}`;
-
-            requests.push({
-                range,
-                values: [rowData]
-            });
-        });
-
-        return requests;
-    }
 }

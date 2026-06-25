@@ -1,9 +1,10 @@
 import { Injectable, Logger, HttpException, HttpStatus, Inject } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { POSTGRES_TOKEN } from '../../shared/constants/constants';
+import { POSTGRES_TOKEN, SHEET_ODM_OPTIONS } from '../../shared/constants/constants';
 import { IPostgresProvider } from '../../interfaces/provider.interface';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
+import { SheetOdmModuleOptions } from '../../interfaces/sheet-odm-options.interface';
 
 
 export interface ISheetReadDriver {
@@ -11,30 +12,37 @@ export interface ISheetReadDriver {
     findMany<T>(sheetName: string, column: string, value: any): Promise<T[]>;
     find<T>(sheetName: string): Promise<T[]>;
 }
-
+// Interfaz estricta para asegurar que enviamos lo que GAS espera
+interface GasPayload {
+    apiKey: string;
+    action: 'findOne' | 'findMany' | 'find';
+    sheet: string;
+    spreadsheetId: string;
+    data?: any;
+}
 @Injectable()
 export class GasQueryGateway implements ISheetReadDriver {
     private readonly logger = new Logger(GasQueryGateway.name);
     private readonly apiKey: string;
     private readonly apiUrl: string;
+    private readonly spreadsheetId: string;
 
     constructor(
         private readonly httpService: HttpService,
-        private readonly configService: ConfigService,
         @Inject(POSTGRES_TOKEN) private readonly pg: IPostgresProvider,
+        // 🔥 INYECTAMOS LAS OPCIONES DEL MÓDULO, NO EL CONFIG SERVICE
+        @Inject(SHEET_ODM_OPTIONS) private readonly options: SheetOdmModuleOptions,
     ) {
-        const envApiUrl = this.configService.get<string>('GAS_WEBAPP_URL');
-        const envApiKey = this.configService.get<string>('GAS_API_KEY');
-        // 2. Validación estricta: Si falta alguna, lanzamos el error de inmediato
-        if (!envApiUrl || !envApiKey) {
+        // Ahora leemos de las opciones que pasaste desde AppModule -> forRootAsync -> useFactory
+        if (!this.options.webAppUrl || !this.options.apiKey || !this.options.spreadsheetId) {
             throw new Error(
-                'La configuración de SheetODM es inválida. Asegúrate de definir GAS_WEBAPP_URL y GAS_API_KEY en tu entorno.'
+                'Configuración SheetODM inválida. Faltan webAppUrl, apiKey o spreadsheetId en la configuración del módulo.'
             );
         }
 
-        // 3. Asignación segura: Aquí TS ya sabe por flujo lógico que dejaron de ser 'undefined'
-        this.apiUrl = envApiUrl;
-        this.apiKey = envApiKey;
+        this.apiUrl = this.options.webAppUrl;
+        this.apiKey = this.options.apiKey;
+        this.spreadsheetId = this.options.spreadsheetId;
     }
 
     /**
@@ -50,6 +58,7 @@ export class GasQueryGateway implements ISheetReadDriver {
             apiKey: this.apiKey,
             action,
             sheet,
+            spreadsheetId: this.spreadsheetId,
             data
         };
 
