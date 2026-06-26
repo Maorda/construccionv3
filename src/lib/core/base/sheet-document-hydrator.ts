@@ -116,6 +116,7 @@ export class SheetDocumentHydrator {
             Object.defineProperty(hydratedDoc, 'toJSON', {
                 value: function () {
                     const plainObject: any = {};
+                    console.log("es toJoson")
 
                     // a. Extraer columnas base definidas en la clase (incluye el ID generado)
                     for (const col of Object.keys(details)) {

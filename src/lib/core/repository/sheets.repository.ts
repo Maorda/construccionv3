@@ -6,7 +6,6 @@ import { ClassType } from '../types/common.types';
 import { ROW_INDEX_SYMBOL } from '../../shared/constants/constants';
 import { TypeOp } from '../outbox/interfaces/outbox-entry.interface';
 import { SheetDocument } from '../wrapper/sheet-document';
-import { SheetDocumentHydrator } from '../base/sheet-document-hydrator';
 import { FilterQuery, FindOneAndUpdateOptions, QueryOptions, UpdateQuery } from '../model/model.factory';
 import { QueryEngine } from '../query/query.engine';
 import { MutationEngine } from '../engine/mutationEngine';
@@ -85,6 +84,7 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
      */
     async find(filter?: FilterQuery<T>, options?: QueryOptions<T>): Promise<U[]> {
         const safeFilter = filter || ({} as FilterQuery<T>);
+        console.log("filtro del find", safeFilter)
 
         if (this.canUseIndexedRead(safeFilter, options)) {
             const propertyName = Object.keys(safeFilter)[0];
@@ -301,18 +301,16 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
             delete rawObject._row;
         }
 
-        const pkValue = rawObject[this.getPrimaryKeyField()];
+        // 1. Mapeamos los datos (como ya lo tienes)
+        const cleanData = this.metadata.mapRawToEntity(rawObject, this.entityClass);
+        const pkField = this.getPrimaryKeyField();
+        const pkValue = cleanData[pkField as keyof typeof cleanData] as string | number;
 
-        if (options?.lean) {
-            return new (this.entityClass as any)(rawObject, this, false) as Ret;
-        }
+        // 2. Instanciamos SIN pasarle data al constructor (pasamos solo repo y isNew)
+        const doc = new (this.entityClass as any)(this, false) as Ret;
 
-        if (pkValue) {
-            const existingDoc = this.uow.get(pkValue, this.entityClass);
-            if (existingDoc) return existingDoc as Ret;
-        }
-
-        const doc = new (this.entityClass as any)(rawObject, this, false) as Ret;
+        // 3. 🚀 ASIGNAMOS AQUÍ: Esto ocurre después de que TS inicializó los campos
+        Object.assign(doc, cleanData);
 
         if (pkValue) {
             this.uow.register(doc, pkValue, this.entityClass);

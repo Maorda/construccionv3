@@ -16,7 +16,7 @@ export abstract class SheetDocument<T> {
         Object.defineProperty(this, INTERNAL_NEW, { value: isNew, enumerable: false, writable: true });
 
         // Asignación de las propiedades de la fila al documento
-        Object.assign(this, data);
+        //  Object.assign(this, data);
     }
 
     /**
@@ -57,21 +57,14 @@ export abstract class SheetDocument<T> {
     /**
      * Serializa el documento de vuelta a un objeto plano.
      */
-    toJSON(): T {
-        if (this._data) {
-            return { ...this._data } as T;
-        }
-
-        const plain: any = {};
+    toJSON(): Record<string, any> {
+        const plainObject: any = {};
         for (const key of Object.keys(this)) {
-            // Excluimos propiedades de control que empiecen con '_' o 'logger'
-            if (!key.startsWith('_') && key !== 'logger') {
-                plain[key] = (this as any)[key];
-            }
+            plainObject[key] = this[key];
         }
-
-        return plain as T;
+        return plainObject;
     }
+
 
     getPrimaryKeyValue(key: keyof T): string | number {
         return (this as any)[key];

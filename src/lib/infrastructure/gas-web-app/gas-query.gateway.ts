@@ -127,6 +127,7 @@ export class GasQueryGateway implements ISheetReadDriver {
 
     async find<T>(sheetName: string): Promise<T[]> {
         const results = await this.executeGasQuery<T[] | null>('find', sheetName);
+        // console.log(`gas query gateway ${JSON.stringify(results)}`);
         return results || [];
     }
 }

@@ -101,7 +101,10 @@ export class DataSourceManager implements OnApplicationShutdown {
 
     async readFindAll<T>(sheetName: string): Promise<T[]> {
         return this.executeWithRetry(
-            () => this.gasQueryGateway.find<T>(sheetName),
+            async () => {
+                console.log(`gas query gateway ${JSON.stringify(await this.gasQueryGateway.find<T>(sheetName))}`);
+                return await this.gasQueryGateway.find<T>(sheetName);
+            },
             `Lectura Global - ${sheetName}`
         );
     }

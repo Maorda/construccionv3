@@ -1,4 +1,3 @@
-import { instanceToPlain } from 'class-transformer';
 import { Injectable, Logger } from '@nestjs/common';
 import {
     SHEETS_PRIMARY_KEY,
@@ -9,12 +8,11 @@ import {
     SHEETS_RELATIONS_LIST,
     SHEETS_TABLE_NAME,
     SHEETS_VERSION_FIELD,
-    SHEETS_VIRTUALS
+    SHEETS_VIRTUALS,
+    ROW_INDEX_SYMBOL
 } from '../../shared/constants/constants';
 import { ColumnOptions, ReferenceOptions, SubCollectionOptions } from '../../core/metadata/interfaces';
 import { ClassType } from '../../core/types/common.types';
-import { RelationOptions } from '@sheetOdm/stages/interfaces/query-stage.interface';
-import { entityDataMap } from '../repository/sheets.repository';
 import { EntityStore } from '../store/entity-store';
 
 export type CompiledRelation =
@@ -267,6 +265,31 @@ export class MetadataRegistry {
             const valor = (rawData as any)[propertyName];
             return valor === undefined || valor === null ? "" : valor;
         });
+    }
+
+    mapRawToEntity<T>(rawData: any, entityClass: ClassType<T>): Partial<T> {
+        const schema = this.getSchema(entityClass);
+        const mappedObject: any = {};
+
+        for (const [propertyName, options] of Object.entries(schema.columns)) {
+            // 🚀 FIX: Forzamos el cast a string porque sabemos que el decorador siempre define un nombre
+            const dbKey = (options.name || propertyName) as string;
+
+            // Verificamos que rawData tenga esa propiedad y la asignamos
+            if (rawData && Object.prototype.hasOwnProperty.call(rawData, dbKey)) {
+                mappedObject[propertyName] = rawData[dbKey];
+            } else if (rawData && Object.prototype.hasOwnProperty.call(rawData, propertyName)) {
+                // Fallback por si la propiedad ya viene mapeada con el nombre de clase
+                mappedObject[propertyName] = rawData[propertyName];
+            }
+        }
+
+        // Aseguramos el símbolo interno
+        if (rawData[ROW_INDEX_SYMBOL]) {
+            mappedObject[ROW_INDEX_SYMBOL] = rawData[ROW_INDEX_SYMBOL];
+        }
+
+        return mappedObject as Partial<T>;
     }
 
 

@@ -23,7 +23,7 @@ export class PlanillaTareoService {
         const nuevoObrero = await this.obreroModel.save(dto);
         return {
             message: 'Obrero registrado exitosamente en la hoja',
-            data: nuevoObrero.toJSON() // toJSON() limpia los metadatos internos
+            data: nuevoObrero // toJSON() limpia los metadatos internos
         };
     }
 
@@ -43,7 +43,7 @@ export class PlanillaTareoService {
 
         return {
             message: 'Adelanto asignado correctamente',
-            data: nuevoAdelanto.toJSON()
+            data: nuevoAdelanto
         };
     }
 
@@ -53,8 +53,8 @@ export class PlanillaTareoService {
 
     async findAllObreros() {
         // Retorna todos los obreros (sin relaciones pobladas)
-        const obreros = await this.obreroModel.find();
-        return obreros.map(obrero => obrero.toJSON());
+        return await this.obreroModel.find();
+
     }
 
     async findObreroConAdelantos(idObrero: string) {
@@ -68,7 +68,7 @@ export class PlanillaTareoService {
             throw new NotFoundException(`Obrero con ID ${idObrero} no encontrado.`);
         }
 
-        return obreroCompleto.toJSON();
+        return obreroCompleto;
     }
 
 }

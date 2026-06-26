@@ -49,6 +49,7 @@ import { SheetsRepository } from './core/repository/sheets.repository';
 import { RepositoryCoreFacade } from './core/repository/repository-core.facade';
 import { SheetCacheModule } from './core/cache/cache.module';
 import { createModel } from './core/model/model.factory';
+import { SheetOdmSerializeInterceptor } from './core/interceptors/sheet-odm-serialize.interceptor';
 
 // ============================================================================
 // AGRUPACIONES DE PROVIDERS (Mantenidas para legibilidad)
@@ -75,6 +76,7 @@ const INTERNAL_SERVICES: Provider[] = [
   SheetDataTransformer,
   PopulateEngine,
   { provide: APP_INTERCEPTOR, useClass: GasTelemetryInterceptor },
+  { provide: APP_INTERCEPTOR, useClass: SheetOdmSerializeInterceptor },
 ];
 
 const TRANSFORM_OPERATORS = [

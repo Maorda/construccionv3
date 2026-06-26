@@ -120,6 +120,7 @@ export function createModel<T extends object>(
                     data[key] = (this as any)[key];
                 }
             }
+            console.log('data', data)
             return data;
         }
 
@@ -221,10 +222,12 @@ export function createModel<T extends object>(
         }
 
         static async find(filter?: FilterQuery<T>, options?: QueryOptions<T>) {
+            console.log("document model find", repo.find(filter, options));
             return repo.find(filter, options);
         }
 
         static async findOne(filter?: FilterQuery<T>, options?: QueryOptions<T>) {
+            console.log("document model find one", repo.findOne(filter, options));
             return repo.findOne(filter, options);
         }
 
