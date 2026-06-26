@@ -51,6 +51,7 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
      * 🔍 BÚSQUEDA ÚNICA
      */
     async findOne(filter?: FilterQuery<T>, options?: QueryOptions<T>): Promise<U | null> {
+        // 1. Intentar lectura indexada (Camino rápido)
         if (this.canUseIndexedRead(filter, options)) {
             const propertyName = Object.keys(filter!)[0];
             const searchValue = String(filter![propertyName as keyof FilterQuery<T>]);
@@ -60,21 +61,24 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
             const columnName = (colConfig?.name || propertyName).toUpperCase();
 
             try {
-                // ✅ El DSM orquesta y ejecuta con su propia resiliencia/reintentos
                 const rawData = await this.dataSource.executeWithRetry(
                     () => this.dataSource.readFindOne<any>(this.sheetName, columnName, searchValue),
                     `Indexed FindOne [${this.sheetName}]`
                 );
 
                 if (rawData) {
-                    return this.hydrateAndCacheRawResult<U>(rawData, options);
+                    const instance = this.hydrateAndCacheRawResult<U>(rawData, options);
+                    // Aplicar población automática en el camino indexado
+                    await this.applyPopulation([instance], options);
+                    return instance;
                 }
-                return null;
             } catch (error: any) {
-                this.logger.warn(`[Fallback] Lectura indexada falló en findOne (${error.message}). Escaneando caché/completo...`);
+                this.logger.warn(`[Fallback] Lectura indexada falló en findOne (${error.message}).`);
             }
         }
 
+        // 2. Fallback: Usar el método find (Camino lento pero seguro)
+        // Como find() ahora es autónomo, llamarlo aquí resuelve automáticamente la población
         const results = await this.find(filter, { ...options, limit: 1 });
         return results.length > 0 ? (results[0] as U) : null;
     }
@@ -84,8 +88,9 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
      */
     async find(filter?: FilterQuery<T>, options?: QueryOptions<T>): Promise<U[]> {
         const safeFilter = filter || ({} as FilterQuery<T>);
-        console.log("filtro del find", safeFilter)
+        let instances: U[] = [];
 
+        // 1. Determinar estrategia de búsqueda (Indexada vs Escaneo)
         if (this.canUseIndexedRead(safeFilter, options)) {
             const propertyName = Object.keys(safeFilter)[0];
             const searchValue = String(safeFilter[propertyName as keyof FilterQuery<T>]);
@@ -102,29 +107,27 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
 
                 if (rawArray && rawArray.length > 0) {
                     const processedItems = await this.queryEngine.execute(rawArray, safeFilter, options);
-                    return processedItems.map(raw => this.hydrateAndCacheRawResult<U>(raw, options));
+                    instances = processedItems.map(raw => this.hydrateAndCacheRawResult<U>(raw, options));
                 }
-                return [];
             } catch (error: any) {
                 this.logger.warn(`[Fallback] Lectura indexada masiva falló. Pasando a escaneo total...`);
             }
         }
 
-        const rawItems = await this.fetchRawData(options?.includeInactive);
-        const processedItems = await this.queryEngine.execute(rawItems, safeFilter, options);
-        const instances = processedItems.map(raw => this.hydrateAndCacheRawResult<U>(raw, options));
-
-        // Pestaña a Pestaña: Si requiere populate, el engine cruzará los registros con la pestaña hija
-        if (options?.populate && instances.length > 0) {
-            await this.populateEngine.populate<T, U>(
-                instances,
-                this.entityClass,
-                options.populate as any
-            );
+        // Si no se usó el índice o el índice no trajo resultados, hacer escaneo total
+        if (instances.length === 0) {
+            const rawItems = await this.fetchRawData(options?.includeInactive);
+            const processedItems = await this.queryEngine.execute(rawItems, safeFilter, options);
+            instances = processedItems.map(raw => this.hydrateAndCacheRawResult<U>(raw, options));
         }
+
+        // 2. Auto-Populación (El momento mágico)
+        // Ya no importa cómo se obtuvieron los datos, aquí se inyectan las relaciones.
+        await this.applyPopulation(instances, options);
 
         return instances;
     }
+
 
     /**
      * 🔄 BUSCAR Y ACTUALIZAR
@@ -166,6 +169,16 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
         } catch (error: any) {
             this.logger.error(`❌ Error en aggregate() en "${this.sheetName}": ${error.message}`);
             throw error;
+        }
+    }
+
+    private async applyPopulation(instances: U[], options?: QueryOptions<T>): Promise<void> {
+        if (options?.populate && instances.length > 0) {
+            await this.populateEngine.populate<T, U>(
+                instances,
+                this.entityClass,
+                options.populate as any
+            );
         }
     }
 
@@ -308,9 +321,16 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
 
         // 2. Instanciamos SIN pasarle data al constructor (pasamos solo repo y isNew)
         const doc = new (this.entityClass as any)(this, false) as Ret;
-
-        // 3. 🚀 ASIGNAMOS AQUÍ: Esto ocurre después de que TS inicializó los campos
         Object.assign(doc, cleanData);
+
+        // 🚀 NUEVO: Inicializamos relaciones como arreglos vacíos 
+        // para que el interceptor reciba [] en lugar de undefined
+        const relations = this.metadata.getCompiledRelations(this.entityClass);
+        for (const rel of relations) {
+            if (rel.isMany) {
+                (doc as any)[rel.propertyName] = [];
+            }
+        }
 
         if (pkValue) {
             this.uow.register(doc, pkValue, this.entityClass);
@@ -318,6 +338,8 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
 
         return doc;
     }
+
+
 
     async clearRepositoryCache(): Promise<void> {
         await this.cacheManager.del(this.getCacheKey());

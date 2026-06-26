@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Injectable, NotFoundException, Param, Post, UsePipes, ValidationPipe } from "@nestjs/common";
+import { Body, Controller, Get, HttpCode, HttpStatus, Injectable, NotFoundException, Param, Post, Query, UsePipes, ValidationPipe } from "@nestjs/common";
 import { Logger } from "@nestjs/common";
 import { InjectModel, Model } from "@sheetOdm/core/model/model.factory";
 import { CreateObreroDto, ObreroEntity } from "./obrero.entity";
@@ -13,62 +13,46 @@ export class PlanillaTareoService {
         @InjectModel(AdelantoEntity) private readonly adelantoModel: Model<AdelantoEntity>,
     ) { }
 
-    // ========================================================================
-    // INSERCIONES
-    // ========================================================================
+    // --- Inserciones ---
 
     async createObrero(dto: CreateObreroDto) {
-        this.logger.debug(`[FLOW-1] DTO Entrante: ${JSON.stringify(dto)}`);
-        // Usando el método estático save del Active Record refactorizado
         const nuevoObrero = await this.obreroModel.save(dto);
-        return {
-            message: 'Obrero registrado exitosamente en la hoja',
-            data: nuevoObrero // toJSON() limpia los metadatos internos
-        };
+        return { message: 'Obrero registrado exitosamente', data: nuevoObrero };
     }
 
     async createAdelanto(idObrero: string, dto: CreateAdelantoDto) {
-        // Validación opcional: verificar que el obrero existe en la base (Sheets)
+        // Validación del padre
         const obrero = await this.obreroModel.findOne({ id: idObrero });
-        if (!obrero) {
-            throw new NotFoundException(`Obrero con ID ${idObrero} no existe.`);
-        }
-        const { idObrero: _, ...dataSinObrero } = dto;
+        if (!obrero) throw new NotFoundException(`Obrero con ID ${idObrero} no existe.`);
 
-        // Forzamos la relación inyectando el idObrero desde el parámetro de la ruta
         const nuevoAdelanto = await this.adelantoModel.save({
-            ...dataSinObrero,
-            idObrero: idObrero
+            ...dto,
+            idObrero // Forzamos la relación
         });
 
-        return {
-            message: 'Adelanto asignado correctamente',
-            data: nuevoAdelanto
-        };
+        return { message: 'Adelanto asignado correctamente', data: nuevoAdelanto };
     }
 
-    // ========================================================================
-    // CONSULTAS
-    // ========================================================================
+    // --- Consultas (Genéricas) ---
 
-    async findAllObreros() {
-        // Retorna todos los obreros (sin relaciones pobladas)
+    async getAllObreros() {
         return await this.obreroModel.find();
-
     }
 
-    async findObreroConAdelantos(idObrero: string) {
-        // Usamos el query option `populate` que configuraste para las SubCollections
-        const obreroCompleto = await this.obreroModel.findOne(
-            { id: idObrero },
-            { populate: 'adelantos' } // Debe hacer match con la propiedad @SubCollection
-        );
+    /**
+     * Consulta flexible: Si 'withAdelantos' es true, el repo 
+     * ejecutará automáticamente el populate configurado en el entity.
+     */
+    async getObreroById(id: string, withAdelantos: boolean = false) {
+        const options = withAdelantos ? { populate: 'adelantos' } : {};
 
-        if (!obreroCompleto) {
-            throw new NotFoundException(`Obrero con ID ${idObrero} no encontrado.`);
+        const obrero = await this.obreroModel.findOne({ id }, options as any);
+
+        if (!obrero) {
+            throw new NotFoundException(`Obrero con ID ${id} no encontrado.`);
         }
 
-        return obreroCompleto;
+        return obrero;
     }
 
 }
@@ -78,31 +62,35 @@ export class PlanillaTareoService {
 export class PlanillaAdminController {
     constructor(private readonly planillaService: PlanillaTareoService) { }
 
-    // 1. Inserción de una sola entidad
     @Post()
-    createObrero(@Body() createObreroDto: CreateObreroDto) {
-        return this.planillaService.createObrero(createObreroDto);
+    @HttpCode(HttpStatus.CREATED)
+    createObrero(@Body() dto: CreateObreroDto) {
+        return this.planillaService.createObrero(dto);
     }
 
-    // 2. Inserción de entidad relacionada
     @Post(':id/adelantos')
-    createAdelanto(
-        @Param('id') idObrero: string,
-        @Body() createAdelantoDto: CreateAdelantoDto
-    ) {
-        return this.planillaService.createAdelanto(idObrero, createAdelantoDto);
+    @HttpCode(HttpStatus.CREATED)
+    createAdelanto(@Param('id') id: string, @Body() dto: CreateAdelantoDto) {
+        return this.planillaService.createAdelanto(id, dto);
     }
 
-    // 3. Consulta de una sola entidad (Lista)
     @Get()
     findAll() {
-        return this.planillaService.findAllObreros();
+        return this.planillaService.getAllObreros();
     }
 
-    // 4. Consulta de entidades relacionadas (Populate)
-    @Get(':id/full')
-    findObreroFull(@Param('id') idObrero: string) {
-        return this.planillaService.findObreroConAdelantos(idObrero);
+    /**
+     * Endpoint flexible: 
+     * /admin-planilla/123 -> Devuelve solo el obrero
+     * /admin-planilla/123?full=true -> Devuelve obrero con adelantos
+     */
+    @Get(':id')
+    findOne(
+        @Param('id') id: string,
+        @Query('full') full?: string // Captura query param '?full=true'
+    ) {
+        const withAdelantos = full === 'true';
+        return this.planillaService.getObreroById(id, withAdelantos);
     }
 
 
