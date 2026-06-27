@@ -291,6 +291,15 @@ export class MetadataRegistry {
 
         return mappedObject as Partial<T>;
     }
+    getExpectedHeadersForGas<T extends object>(entityClass: ClassType<T>): string[] {
+        const schema = this.getSchema(entityClass);
+        return schema.columnList.map(prop => {
+            const colConfig = schema.columns[prop];
+            const baseName = colConfig?.name || prop;
+            // Si tiene la propiedad index en true, devolvemos el nombre con asterisco
+            return colConfig?.index ? `${baseName}*` : baseName;
+        });
+    }
 
 
 

@@ -17,7 +17,7 @@ export class PopulateEngine {
     /**
      * Punto de entrada principal
      */
-    async populate<T extends object, DocType extends object>( // 🔥 Cambiamos 'extends T' por 'extends object'
+    async populate<T extends object, DocType extends object>(
         documents: DocType[],
         entityClass: ClassType<T>,
         populateInput: string | string[]
@@ -30,7 +30,8 @@ export class PopulateEngine {
         await this.populateLevel<T, DocType>(documents, entityClass, tree);
         return documents;
     }
-    private async populateLevel<T extends object, DocType extends object>( // 🔥 Igual aquí
+
+    private async populateLevel<T extends object, DocType extends object>(
         documents: DocType[],
         entityClass: ClassType<T>,
         tree: PopulateTree
@@ -50,10 +51,9 @@ export class PopulateEngine {
             const targetPK = this.metadataRegistry.getPrimaryKeyField(targetClass);
             const localPK = this.metadataRegistry.getPrimaryKeyField(entityClass);
 
-            // 🚀 Resolución Dinámica del Modelo Destino vía NestJS
+            // 🚀 Resolución Dinámica exacta según la convención de tu InjectModel
             let targetModel: any;
             try {
-                // Usamos el token generado por tu InjectModel (ej: 'FotoModel')
                 const modelToken = `${targetClass.name}Model`;
                 targetModel = this.moduleRef.get(modelToken, { strict: false });
             } catch (error) {
@@ -64,14 +64,15 @@ export class PopulateEngine {
             // Extracción de IDs y Batch Loading
             let relatedDocs: any[] = [];
             if (!relationConfig.isMany) {
-                const joinCol = relationConfig.joinColumn;
+                const joinCol = relationConfig.joinColumn as string;
                 const ids = [...new Set(documents.map(d => (d as any)[joinCol]))].filter(Boolean);
 
                 if (ids.length > 0) {
-                    relatedDocs = await targetModel.find({ [targetPK]: { $in: ids } });
+                    relatedDocs = await targetModel.find({ [targetPK as string]: { $in: ids } });
                 }
             } else {
-                const mappedBy = relationConfig.localField || `${entityClass.name.toLowerCase()}Id`;
+                // 🔥 Solución a Queja 1: Aseguramos a TS que mappedBy es un string válido
+                const mappedBy = relationConfig.joinColumn as string;
                 const parentIds = [...new Set(documents.map(d => (d as any)[localPK]))].filter(Boolean);
 
                 if (parentIds.length > 0) {
@@ -82,9 +83,10 @@ export class PopulateEngine {
             // Mapeo en Memoria O(N)
             const map = new Map();
             for (const doc of relatedDocs) {
+                // 🔥 Solución a Queja 2: Forzamos el tipado como llave de acceso de objeto
                 const key = !relationConfig.isMany
-                    ? (doc as any)[targetPK]
-                    : (doc as any)[relationConfig.localField || `${entityClass.name.toLowerCase()}Id`];
+                    ? (doc as any)[targetPK as string]
+                    : (doc as any)[relationConfig.joinColumn as string];
 
                 if (!map.has(key)) map.set(key, relationConfig.isMany ? [] : null);
 
@@ -94,7 +96,10 @@ export class PopulateEngine {
 
             // Inyección en los documentos actuales
             for (const doc of documents) {
-                const key = !relationConfig.isMany ? (doc as any)[relationConfig.joinColumn] : (doc as any)[localPK];
+                const key = !relationConfig.isMany
+                    ? (doc as any)[relationConfig.joinColumn as string]
+                    : (doc as any)[localPK as string];
+
                 (doc as any)[propertyName] = map.get(key) || (relationConfig.isMany ? [] : null);
             }
 

@@ -26,7 +26,9 @@ export function Column(options: ColumnOptions = {}): PropertyDecorator {
             isDeleteControl: options.isDeleteControl || false,
             isAutoIncrement: options.isAutoIncrement || (options.generated === 'increment'),
             generated: options.generated,
-            validation: options.validation
+            validation: options.validation,
+            index: options.index || false
+
         };
 
         let details = Reflect.getOwnMetadata(SHEETS_COLUMN_DETAILS, classConstructor);

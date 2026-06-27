@@ -4,7 +4,6 @@ import { MetadataRegistry } from '../core/metadata/metadata.registry';
 import { SHEETS_DTO, SHEETS_TABLE_NAME } from '../shared/constants/constants';
 import { ClassType } from '../core/types/common.types';
 
-
 @Injectable()
 export class InfrastructureProvisioner {
     private readonly logger = new Logger(InfrastructureProvisioner.name);
@@ -61,7 +60,6 @@ export class InfrastructureProvisioner {
     private async syncConfigSheet(config: Record<string, string>, existingSheetsUpper: Set<string>) {
         const configSheetName = '_CONFIG';
 
-        // Uso de Set local para evitar la llamada redundante a la API
         if (!existingSheetsUpper.has(configSheetName)) {
             await this.gateway.createSheet(configSheetName);
         }
@@ -79,24 +77,59 @@ export class InfrastructureProvisioner {
         this.logger.log(`✅ Pestaña "${sheetName}" creada con cabeceras: [${headers.join(', ')}]`);
     }
 
+    // 🔥 MEJORA CRÍTICA: Migración inteligente In-Place para Asteriscos de Índices
     private async migrateExistingSheet(sheetName: string, definedHeaders: string[]) {
         const actualRows = await this.gateway.getRange(`${sheetName}!1:1`);
 
         // Control de daños si la hoja está completamente vacía
         const currentHeaders = actualRows && actualRows[0]
-            ? actualRows[0].map((h: any) => String(h).trim().toUpperCase())
+            ? actualRows[0].map((h: any) => String(h).trim())
             : [];
 
-        // Búsqueda rápida mediante Set
-        const currentHeadersSet = new Set(currentHeaders);
-        const missingHeaders = definedHeaders.filter(h => !currentHeadersSet.has(h.toUpperCase()));
+        // Helper para limpiar asteriscos y espacios (Garantiza comparaciones limpias)
+        const cleanHeader = (h: string) => h.replace(/\*$/, '').trim().toUpperCase();
+
+        // Mapeo rápido de lo que el desarrollador ha declarado en el código [NombreLimpio -> NombreConOWithoutAsterisk]
+        const definedHeadersMap = new Map<string, string>();
+        definedHeaders.forEach(h => definedHeadersMap.set(cleanHeader(h), h));
+
+        const currentHeadersCleanSet = new Set(currentHeaders.map(cleanHeader));
+        let hasChanges = false;
+
+        // 1. Sincronizar en su misma posición las cabeceras existentes (Control de mutación de asteriscos)
+        const updatedCurrentHeaders = currentHeaders.map(current => {
+            const cleanCurrent = cleanHeader(current);
+            const matchedDefined = definedHeadersMap.get(cleanCurrent);
+
+            if (matchedDefined) {
+                // Si el formato cambió (ej: de "DNI" a "DNI*" o viceversa), marcamos actualización
+                if (current !== matchedDefined) {
+                    hasChanges = true;
+                }
+                return matchedDefined;
+            }
+            // Si la columna está en Sheets pero no en el código, se conserva intacta (tolerancia a columnas manuales)
+            return current;
+        });
+
+        // 2. Identificar columnas completamente nuevas añadidas en el código
+        const missingHeaders = definedHeaders.filter(h => !currentHeadersCleanSet.has(cleanHeader(h)));
 
         if (missingHeaders.length > 0) {
-            this.logger.log(`🔄 Auto-migración en "${sheetName}": Anexando columnas [${missingHeaders.join(', ')}]`);
-            const finalHeaders = [...currentHeaders, ...missingHeaders];
+            hasChanges = true;
+        }
+
+        // 3. Persistir en Google Sheets únicamente si hubo cambios estructurales o de indexación
+        if (hasChanges) {
+            const finalHeaders = [...updatedCurrentHeaders, ...missingHeaders];
+            this.logger.log(`🔄 Sincronizando índices/columnas en "${sheetName}"...`);
+
+            if (missingHeaders.length > 0) {
+                this.logger.log(`➕ Nuevas columnas acopladas al final: [${missingHeaders.join(', ')}]`);
+            }
 
             await this.gateway.writeHeaders(sheetName, finalHeaders);
-            this.logger.log(`✅ Estructura de "${sheetName}" sincronizada con éxito.`);
+            this.logger.log(`✅ Estructura e índices de "${sheetName}" actualizados sin alterar el orden de los datos.`);
         }
     }
 
@@ -135,6 +168,7 @@ export class InfrastructureProvisioner {
         }
     }
 
+    // 🔥 REFACTORIZACIÓN CORE: Inyección dinámica del Asterisco basado en los metadatos del decorador
     private getHeadersForEntity(entity: ClassType): string[] {
         const colDetails = this.registry.getColumnDetails(entity);
         const colMap = this.registry.getColumnMap(entity);
@@ -143,7 +177,11 @@ export class InfrastructureProvisioner {
             .sort(([, a], [, b]) => a - b)
             .map(([propName]) => {
                 const colConfig = colDetails[propName];
-                return (colConfig?.name ? colConfig.name : propName).toUpperCase();
+                const baseName = (colConfig?.name ? colConfig.name : propName).toUpperCase();
+
+                // 🚀 Si el desarrollador configuró index: true, le inyectamos el asterisco de forma transparente
+                // Nota: Asegúrate de que tu interfaz 'ColumnOptions' acepte la propiedad 'index?: boolean'
+                return colConfig?.index ? `${baseName}*` : baseName;
             });
     }
 }

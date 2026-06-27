@@ -35,7 +35,7 @@ export class CreateObreroDto {
 @Table('OBREROS', { dto: CreateObreroDto })
 export class ObreroEntity {
     @PrimaryKey()
-    @Column({ name: 'ID_OBRERO', generated: 'short-id' })
+    @Column({ name: 'ID_OBRERO', generated: 'short-id', index: true })
     id: string;
 
     @Column({ name: 'NOMBRE', required: true })
@@ -55,6 +55,6 @@ export class ObreroEntity {
     @Column({ name: 'SALDO_HORAS_EXTRA_ARRANGED', type: 'number', default: 0 })
     saldoHorasExtraArrastrado: number; // Negativo si debe horas (Dinámica de Deuda de Horas)
 
-    @SubCollection(() => AdelantoEntity, { joinColumn: 'idObrero', localField: 'idObrero' })
+    @SubCollection(() => AdelantoEntity, { joinColumn: 'idObrero', localField: 'id' })
     adelantos: AdelantoEntity[];
 }

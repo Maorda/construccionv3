@@ -7,4 +7,5 @@ export interface ColumnOptions {
     isAutoIncrement?: boolean;
     generated?: 'uuid' | 'short-id' | 'increment';
     validation?: Record<string, any>;
+    index?: boolean;
 }
