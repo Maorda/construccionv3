@@ -3,15 +3,13 @@ import { Injectable, Logger } from '@nestjs/common';
 import { MetadataRegistry } from '../metadata/metadata.registry';
 import { ClassType } from '../types/common.types';
 import { buildPopulateTree, PopulateTree } from './populate.utils';
-import { ModuleRef } from '@nestjs/core';
+import { ModelRegistry } from '../model/model.registry';
 
 @Injectable()
 export class PopulateEngine {
     private readonly logger = new Logger(PopulateEngine.name);
     constructor(
         private readonly metadataRegistry: MetadataRegistry,
-        private readonly moduleRef: ModuleRef
-
     ) { }
 
     /**
@@ -51,13 +49,12 @@ export class PopulateEngine {
             const targetPK = this.metadataRegistry.getPrimaryKeyField(targetClass);
             const localPK = this.metadataRegistry.getPrimaryKeyField(entityClass);
 
-            // 🚀 Resolución Dinámica exacta según la convención de tu InjectModel
-            let targetModel: any;
-            try {
-                const modelToken = `${targetClass.name}Model`;
-                targetModel = this.moduleRef.get(modelToken, { strict: false });
-            } catch (error) {
-                this.logger.error(`No se pudo resolver el modelo para ${targetClass.name} en ModuleRef.`);
+            // 🚀 Resolución Dinámica O(1) usando el ModelRegistry Global
+            const targetModel = ModelRegistry.get(targetClass.name);
+            console.log("targetModel", targetModel)
+
+            if (!targetModel) {
+                this.logger.error(`[PopulateEngine] No se pudo encontrar el modelo registrado para ${targetClass.name}. Asegúrate de incluir esta entidad en el 'forFeature' de tu módulo.`);
                 continue;
             }
 
@@ -76,7 +73,9 @@ export class PopulateEngine {
                 const parentIds = [...new Set(documents.map(d => (d as any)[localPK]))].filter(Boolean);
 
                 if (parentIds.length > 0) {
+
                     relatedDocs = await targetModel.find({ [mappedBy]: { $in: parentIds } });
+                    console.log("relatedDocs", relatedDocs)
                 }
             }
 
@@ -110,7 +109,4 @@ export class PopulateEngine {
             }
         }
     }
-
-
-
 }

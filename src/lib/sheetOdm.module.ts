@@ -28,7 +28,7 @@ import {
   IncOperator, MathOperator, MinMaxOperator, MultiplyOperator,
   RoundOperator, TimeDiffOperator, TrimOperator, UpperOperator
 } from './stages/transform.operators';
-import { EqOperator, GtOperator } from './stages/filter.operators';
+import { EqOperator, ExistsOperator, GteOperator, GtOperator, InOperator, LteOperator, LtOperator, NeOperator, NinOperator, RegexOperator } from './stages/filter.operators';
 
 // Infraestructura y Repositorios
 import { PostgresProvider } from './adapters/postgres.provider';
@@ -50,6 +50,7 @@ import { RepositoryCoreFacade } from './core/repository/repository-core.facade';
 import { SheetCacheModule } from './core/cache/cache.module';
 import { createModel } from './core/model/model.factory';
 import { SheetOdmSerializeInterceptor } from './core/interceptors/sheet-odm-serialize.interceptor';
+import { ModelRegistry } from './core/model/model.registry';
 
 // ============================================================================
 // AGRUPACIONES DE PROVIDERS (Mantenidas para legibilidad)
@@ -85,7 +86,7 @@ const TRANSFORM_OPERATORS = [
   TrimOperator, DateAddOperator, TimeDiffOperator, AggregateOperator
 ];
 
-const FILTER_OPERATORS = [EqOperator, GtOperator];
+const FILTER_OPERATORS = [EqOperator, GtOperator, InOperator, NinOperator, NeOperator, GteOperator, LtOperator, LteOperator, RegexOperator, ExistsOperator];
 
 const PIPELINE_STAGES = [
   MatchStage, SortStage, LimitStage, SkipStage, ProjectStage, AddFieldsStage
@@ -237,6 +238,8 @@ export class SheetOdmModule implements OnApplicationBootstrap {
     const providers: Provider[] = entities.flatMap((entity) => {
       MetadataRegistry.register(entity as any);
 
+
+
       const repositoryToken = `SheetsRepository_${entity.name}`;
 
       const repositoryProvider: Provider = {
@@ -248,7 +251,12 @@ export class SheetOdmModule implements OnApplicationBootstrap {
 
       const modelProvider: Provider = {
         provide: `${entity.name}Model`,
-        useFactory: (repo: SheetsRepository<any>) => createModel(entity as any, repo),
+        useFactory: (repo: SheetsRepository<any>) => {
+          const model = createModel(entity as any, repo);
+          // 🔥 Registro automático
+          ModelRegistry.register(entity.name, model);
+          return model;
+        },
         inject: [repositoryToken],
       };
 
