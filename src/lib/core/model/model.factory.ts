@@ -1,7 +1,7 @@
 import { Inject, Logger } from '@nestjs/common';
 import { SheetDocument } from '../wrapper/sheet-document';
 import { SheetsRepository } from '../repository/sheets.repository';
-import { ROW_INDEX_SYMBOL } from '../../shared/constants/constants';
+import { ROW_INDEX_SYMBOL, SHEETS_COLUMN_DETAILS, SHEETS_RELATIONS_LIST } from '../../shared/constants/constants';
 import { ClassType } from '../types/common.types';
 
 // ============================================================================
@@ -108,21 +108,7 @@ export function createModel<T extends object>(
         declare private __modifiedPaths: Set<string>;
         private readonly logger = new Logger(DocumentModel.name);
 
-        getData(): Record<string, any> {
-            const data: Record<string, any> = {};
-            // Al estar dentro de la clase, 'this' tiene acceso a las propiedades
-            // incluso si el Hydrator intentó ocultarlas del mundo exterior.
-            const allKeys = Object.getOwnPropertyNames(this);
 
-            for (const key of allKeys) {
-                // Filtramos lo que no es dato de negocio
-                if (key !== 'logger' && !key.startsWith('_') && key !== 'constructor') {
-                    data[key] = (this as any)[key];
-                }
-            }
-            console.log('data', data)
-            return data;
-        }
 
         constructor(data: Partial<T> = {}) {
             this.logger.debug(`[FLOW-2] Datos recibidos en Constructor: ${Object.keys(data).length} keys. Keys: ${Object.keys(data)}`);
@@ -160,6 +146,54 @@ export function createModel<T extends object>(
 
         }
 
+        toJSON() {
+            const plain: any = {};
+            const details = Reflect.getMetadata(SHEETS_COLUMN_DETAILS, entityClass.prototype) || {};
+            const descriptors = Object.getOwnPropertyDescriptors(entityClass.prototype);
+
+            // 1. Columnas base (Nombres limpios de TypeScript)
+            for (const col of Object.keys(details)) {
+                plain[col] = (this as any)[col] !== undefined ? (this as any)[col] : null;
+            }
+
+            // 2. Virtuals / Getters definidos en la entidad
+            for (const key of Object.keys(descriptors)) {
+                if (descriptors[key].get && key !== 'constructor') {
+                    plain[key] = (this as any)[key];
+                }
+            }
+
+            // 3. Relaciones (Ej: array de adelantos)
+            const relations = Reflect.getOwnMetadata(SHEETS_RELATIONS_LIST, entityClass.prototype) || [];
+            for (const rel of relations) {
+                if ((this as any)[rel] !== undefined) plain[rel] = (this as any)[rel];
+            }
+
+            return plain;
+        }
+
+        // ====================================================================
+        // 📝 SERIALIZACIÓN PARA BASE DE DATOS (Google Sheets Outbox)
+        // ====================================================================
+        toSheetRow() {
+            const plain: any = {};
+            const details = Reflect.getMetadata(SHEETS_COLUMN_DETAILS, entityClass.prototype) || {};
+
+            // Mapeo inverso: De llaves TS a Cabeceras reales (con asteriscos)
+            for (const key of Object.keys(details)) {
+                const config = details[key];
+                const dbColumnName = config.name || key;
+                plain[dbColumnName] = (this as any)[key] !== undefined ? (this as any)[key] : null;
+            }
+
+            // Inyectar el número de fila para que Sheets sepa qué actualizar
+            if (this.rowNumber !== undefined) {
+                plain.__row = this.rowNumber;
+            }
+
+            return plain;
+        }
+
         // ====================================================================
         // MÉTODOS DE INSTANCIA (Capacidad Active Record)
         // Optimizados en el prototipo para no consumir memoria redundante
@@ -180,27 +214,6 @@ export function createModel<T extends object>(
             return (this as any)[key];
         }
 
-        toJSON() {
-            const plain: any = {};
-
-            // 🚀 La magia: Obtenemos TODOS los nombres de propiedades, 
-            // sin importar si son enumerables o no.
-            const allProps = Object.getOwnPropertyNames(this);
-
-            for (const prop of allProps) {
-                // Filtramos lo que NO queremos incluir (logger, metadatos, etc.)
-                if (
-                    prop !== 'logger' &&
-                    !prop.startsWith('_') &&
-                    prop !== 'constructor'
-                ) {
-                    // Accedemos directamente al valor
-                    plain[prop] = (this as any)[prop];
-                }
-            }
-
-            return plain;
-        }
 
         get rowNumber(): number | undefined {
             return (this as any)[ROW_INDEX_SYMBOL];

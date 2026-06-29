@@ -54,16 +54,6 @@ export abstract class SheetDocument<T> {
         return (this as any)[ROW_INDEX_SYMBOL];
     }
 
-    /**
-     * Serializa el documento de vuelta a un objeto plano.
-     */
-    toJSON(): Record<string, any> {
-        const plainObject: any = {};
-        for (const key of Object.keys(this)) {
-            plainObject[key] = this[key];
-        }
-        return plainObject;
-    }
 
 
     getPrimaryKeyValue(key: keyof T): string | number {
