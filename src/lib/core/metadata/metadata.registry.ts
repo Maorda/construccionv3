@@ -197,24 +197,25 @@ export class MetadataRegistry {
         const relationProperties: string[] = Reflect.getMetadata(SHEETS_RELATIONS_LIST, proto) || [];
         const compiledRelations: Record<string, CompiledRelation> = {};
 
+        // Reemplaza el bucle for existente en compileSchema por este:
         for (const prop of relationProperties) {
             const rawRel = Reflect.getMetadata(SHEETS_ALL_RELATIONS, proto, prop) ||
                 Reflect.getMetadata(SHEETS_ALL_RELATIONS, entityClass, prop);
 
             if (!rawRel) continue;
 
+            // Aquí está el arreglo: accedemos directamente a rawRel
             if (rawRel.isMany) {
-                const subOptions: SubCollectionOptions = rawRel.options || { cascadeDelete: false };
                 compiledRelations[prop] = {
                     propertyName: prop,
                     isMany: true,
                     type: 'subcollection',
                     targetEntity: rawRel.targetEntity,
-                    joinColumn: subOptions.joinColumn,
-                    localField: subOptions.localField,
-
-                    onDelete: subOptions.onDelete || 'RESTRICT',
-                    rawOptions: subOptions
+                    joinColumn: rawRel.joinColumn, // <-- Acceso directo
+                    // localField es opcional, si no existe no pasa nada
+                    localField: rawRel.localField || undefined,
+                    onDelete: rawRel.onDelete || 'CASCADE',
+                    rawOptions: rawRel // Mantenemos el original por si acaso
                 };
             } else {
                 compiledRelations[prop] = {
@@ -222,14 +223,10 @@ export class MetadataRegistry {
                     isMany: false,
                     type: 'reference',
                     targetEntity: rawRel.targetEntity,
-                    joinColumn: rawRel.joinColumn,
+                    joinColumn: rawRel.joinColumn, // <-- Acceso directo
                     required: rawRel.required ?? false,
                     onDelete: rawRel.onDelete || 'RESTRICT',
-                    rawOptions: {
-                        joinColumn: rawRel.joinColumn,
-                        required: rawRel.required,
-                        onDelete: rawRel.onDelete
-                    }
+                    rawOptions: rawRel
                 };
             }
         }

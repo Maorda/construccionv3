@@ -3,7 +3,7 @@ import { MetadataRegistry } from '../metadata/metadata.registry';
 import { DataSourceManager } from '../data-source-manager';
 import { UnitOfWork } from '../uow/services/unit-of-work.service';
 import { ClassType } from '../types/common.types';
-import { ROW_INDEX_SYMBOL } from '../../shared/constants/constants';
+import { ROW_INDEX_SYMBOL, SHEETS_COLUMN_DETAILS } from '../../shared/constants/constants';
 import { TypeOp } from '../outbox/interfaces/outbox-entry.interface';
 import { SheetDocument } from '../wrapper/sheet-document';
 import { FilterQuery, FindOneAndUpdateOptions, QueryOptions, UpdateQuery } from '../model/model.factory';
@@ -88,6 +88,7 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
      */
     async find(filter?: FilterQuery<T>, options?: QueryOptions<T>): Promise<U[]> {
         const safeFilter = filter || ({} as FilterQuery<T>);
+        this.logger.debug(`[FIND] Iniciando búsqueda en [${this.sheetName}]. Filtro: ${JSON.stringify(safeFilter)}`);
         let instances: U[] = [];
 
         // 1. Determinar estrategia de búsqueda (Indexada vs Escaneo)
@@ -106,8 +107,12 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
                 );
 
                 if (rawArray && rawArray.length > 0) {
-                    const processedItems = await this.queryEngine.execute(rawArray, safeFilter, options);
-                    instances = processedItems.map(raw => this.hydrateAndCacheRawResult<U>(raw, options));
+                    this.logger.debug(`[FIND] Sheets retornó ${rawArray.length} filas crudas (Indexadas). Muestra de cabeceras: ${Object.keys(rawArray[0])}`);
+                    // 🔄 Aquí ocurre la magia: rawArray (SNAKE) -> mapeado e instanciado (camelCase)
+                    const mappedInstances = rawArray.map(raw => this.hydrateAndCacheRawResult<U>(raw, options));
+
+                    // El QueryEngine ahora puede filtrar con { idObrero: ... } porque procesa instancias limpias
+                    instances = await this.queryEngine.execute(mappedInstances, safeFilter, options);
                 }
             } catch (error: any) {
                 this.logger.warn(`[Fallback] Lectura indexada masiva falló. Pasando a escaneo total...`);
@@ -117,13 +122,24 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
         // Si no se usó el índice o el índice no trajo resultados, hacer escaneo total
         if (instances.length === 0) {
             const rawItems = await this.fetchRawData(options?.includeInactive);
-            const processedItems = await this.queryEngine.execute(rawItems, safeFilter, options);
-            instances = processedItems.map(raw => this.hydrateAndCacheRawResult<U>(raw, options));
+            if (rawItems.length > 0) {
+                this.logger.debug(`[FIND] Sheets retornó ${rawItems.length} filas crudas (Escaneo). Muestra de cabeceras: ${Object.keys(rawItems[0])}`);
+            }
+
+            // 🔄 Lo mismo para el escaneo total
+            const mappedInstances = rawItems.map(raw => this.hydrateAndCacheRawResult<U>(raw, options));
+
+            instances = await this.queryEngine.execute(mappedInstances, safeFilter, options);
         }
 
-        // 2. Auto-Populación (El momento mágico)
-        // Ya no importa cómo se obtuvieron los datos, aquí se inyectan las relaciones.
+        // 2. Auto-Populación
+        // 'instances' va cargado con objetos TypeScript puros que el PopulateEngine entiende perfectamente.
         await this.applyPopulation(instances, options);
+
+        if (instances.length > 0 && this.sheetName === 'obreros') { // Ejemplo con obreros
+            const muestra = instances[0] as any;
+            this.logger.debug(`[POPULATE] Primer obrero resultado: ID=${muestra.id}, Adelantos Cargados=${muestra.adelantos?.length || 0}`);
+        }
 
         return instances;
     }
@@ -309,22 +325,29 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
     // ====================================================================
 
     private hydrateAndCacheRawResult<Ret extends U = U>(rawObject: any, options?: QueryOptions<T>): Ret {
-        if (rawObject._row !== undefined && rawObject._row !== null) {
-            rawObject[ROW_INDEX_SYMBOL] = rawObject._row;
-            delete rawObject._row;
+        if (!rawObject) return null as any;
+
+        // 1. Evitamos mutar el objeto original creando una copia superficial segura
+        const targetRaw = { ...rawObject };
+
+        if (targetRaw._row !== undefined && targetRaw._row !== null) {
+            targetRaw[ROW_INDEX_SYMBOL] = targetRaw._row;
+            delete targetRaw._row; // Ahora es seguro eliminarlo porque es nuestra copia
         }
 
-        // 1. Mapeamos los datos (como ya lo tienes)
-        const cleanData = this.metadata.mapRawToEntity(rawObject, this.entityClass);
+        // 2. Mapeamos los datos de SNAKE_CASE a camelCase usando tu infraestructura
+        const cleanData = this.metadata.mapRawToEntity(targetRaw, this.entityClass);
+        if (this.sheetName === 'adelantos') { // O la pestaña que estés debugueando
+            this.logger.verbose(`[HYDRATE] Datos convertidos a CamelCase: ${JSON.stringify(cleanData)}`);
+        }
         const pkField = this.getPrimaryKeyField();
         const pkValue = cleanData[pkField as keyof typeof cleanData] as string | number;
 
-        // 2. Instanciamos SIN pasarle data al constructor (pasamos solo repo y isNew)
+        // 3. Instanciamos con el patrón Active Record de tu ODM
         const doc = new (this.entityClass as any)(this, false) as Ret;
         Object.assign(doc, cleanData);
 
-        // 🚀 NUEVO: Inicializamos relaciones como arreglos vacíos 
-        // para que el interceptor reciba [] en lugar de undefined
+        // 4. Inicializamos relaciones como arreglos vacíos de forma preventiva
         const relations = this.metadata.getCompiledRelations(this.entityClass);
         for (const rel of relations) {
             if (rel.isMany) {
@@ -332,6 +355,7 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
             }
         }
 
+        // 5. Registro seguro en la Unidad de Trabajo (Unit of Work)
         if (pkValue) {
             this.uow.register(doc, pkValue, this.entityClass);
         }
@@ -517,6 +541,32 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
             num = Math.floor((num - 1) / 26);
         }
         return letter;
+    }
+    private translateRawToCamelCase(rawRow: any): Partial<T> {
+        const hydrated: any = {};
+
+        // Obtener la metadata detallada de las columnas desde el prototipo de la Entidad
+        const details = Reflect.getMetadata(SHEETS_COLUMN_DETAILS, this.entityClass.prototype) || {};
+
+        // Iteramos sobre las llaves reales de TypeScript definidas en el código del desarrollador
+        for (const [tsPropertyName, config] of Object.entries(details)) {
+            // Obtenemos el nombre físico de la columna en Google Sheets configurado en el decorador.
+            // Si el desarrollador omitió el 'name', hacemos fallback a la propiedad de TS.
+            const dbColumnName = (config as any).name || tsPropertyName;
+
+            if (rawRow[dbColumnName] !== undefined) {
+                hydrated[tsPropertyName] = rawRow[dbColumnName];
+            }
+        }
+
+        // Preservar de forma segura el índice físico de la fila mapeado al Symbol global.
+        // Esto es vital porque el constructor de tu DocumentModel evalúa este Symbol 
+        // para marcar la entidad como persistida (__isNew = false).
+        if (rawRow.__row !== undefined) {
+            hydrated[ROW_INDEX_SYMBOL] = rawRow.__row;
+        }
+
+        return hydrated;
     }
 
 
