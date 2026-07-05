@@ -6,6 +6,16 @@ import { Table } from "../lib/core/decorators/table.decorator";
 import { IsString, IsNotEmpty, IsNumber, IsOptional } from "class-validator";
 import { AdelantoEntity } from "./adelanto.entity";
 
+
+export class GetAdelantosReportDto {
+    @IsString()
+    @IsNotEmpty()
+    obreroId: string;
+
+    @IsNumber()
+    @IsOptional()
+    minMonto?: number = 0; // Valor por defecto
+}
 export class CreateObreroDto {
     @IsString()
     @IsOptional()

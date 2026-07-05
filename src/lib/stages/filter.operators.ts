@@ -26,9 +26,12 @@ export class GtOperator implements IExpressionOperator {
     readonly name = '$gt';
     readonly schema = ['val1', 'val2'];
 
+
+
     exec(args: any, record: any, engine: any): boolean {
         const v1 = Number(engine.evaluate(args.val1, record));
         const v2 = Number(engine.evaluate(args.val2, record));
+        console.log(`[DEBUG Gt] Comparando: ${v1} > ${v2}`);
         return !isNaN(v1) && !isNaN(v2) ? v1 > v2 : false;
     }
 }

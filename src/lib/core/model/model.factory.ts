@@ -3,6 +3,8 @@ import { SheetDocument } from '../wrapper/sheet-document';
 import { SheetsRepository } from '../repository/sheets.repository';
 import { ROW_INDEX_SYMBOL, SHEETS_COLUMN_DETAILS, SHEETS_RELATIONS_LIST } from '../../shared/constants/constants';
 import { ClassType } from '../types/common.types';
+import { MetadataRegistry } from '../metadata/metadata.registry';
+import { AggregationBuilder } from '../../stages/aggregation.builder';
 
 // ============================================================================
 // TIPOS Y OPCIONES (Tipado Estricto Mongoose-like)
@@ -91,6 +93,7 @@ export type Model<T extends object> = {
     findOne(filter?: FilterQuery<T>, options?: QueryOptions<T>): Promise<(T & SheetDocument<T>) | null>;
     findOneAndUpdate(filter: FilterQuery<T>, update: UpdateQuery<T>, options?: FindOneAndUpdateOptions<T>): Promise<(T & SheetDocument<T>) | null>;
     aggregate<R = any>(pipeline: any[]): Promise<R[]>;
+    aggregate(): AggregationBuilder;
 };
 
 // ============================================================================
@@ -181,8 +184,8 @@ export function createModel<T extends object>(
 
             // Mapeo inverso: De llaves TS a Cabeceras reales (con asteriscos)
             for (const key of Object.keys(details)) {
-                const config = details[key];
-                const dbColumnName = config.name || key;
+                const dbColumnName = MetadataRegistry.prototype.getDatabaseColumnName(entityClass, key);
+
                 plain[dbColumnName] = (this as any)[key] !== undefined ? (this as any)[key] : null;
             }
 
@@ -248,8 +251,9 @@ export function createModel<T extends object>(
             return repo.findOneAndUpdate(filter, update, options);
         }
 
-        static async aggregate<R = any>(pipeline: any[]): Promise<R[]> {
-            return repo.aggregate<R>(pipeline);
+        static aggregate(): AggregationBuilder {
+            // repo es la instancia que pasaste al crear el modelo
+            return repo.createAggregation();
         }
     }
 

@@ -13,6 +13,8 @@ import { PopulateEngine } from '../engine/populate.engine';
 import { GasQueryGateway } from '../../infrastructure/gas-web-app/gas-query.gateway';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Cache } from 'cache-manager'
+import { AggregationBuilder } from '../../stages/aggregation.builder';
+import { AggregationFactory } from '../../stages/interfaces/aggregation.factory';
 
 @Injectable()
 export class RepositoryCoreFacade {
@@ -29,6 +31,9 @@ export class RepositoryCoreFacade {
 
         public readonly transformer: SheetDataTransformer,
         public readonly populateEngine: PopulateEngine,
+        public readonly aggregationBuilder: AggregationBuilder,
+        public readonly aggregationFactory: AggregationFactory,
+
         @Inject(CACHE_MANAGER) public readonly cacheManager: Cache
     ) { }
 }

@@ -270,7 +270,7 @@ export class MetadataRegistry {
 
         for (const [propertyName, options] of Object.entries(schema.columns)) {
             // 🚀 FIX: Forzamos el cast a string porque sabemos que el decorador siempre define un nombre
-            const dbKey = (options.name || propertyName) as string;
+            const dbKey = this.getDatabaseColumnName(entityClass, propertyName);
 
             // Verificamos que rawData tenga esa propiedad y la asignamos
             if (rawData && Object.prototype.hasOwnProperty.call(rawData, dbKey)) {
@@ -297,6 +297,18 @@ export class MetadataRegistry {
             return colConfig?.index ? `${baseName}*` : baseName;
         });
     }
+    public getDatabaseColumnName(entityClass: ClassType<any>, propertyName: string): string {
+        const schema = this.getSchema(entityClass);
+        const colConfig = schema.columns[propertyName];
+
+        // Si no es un campo de columna (ej: relación no indexada), devolvemos el nombre tal cual
+        if (!colConfig) return propertyName;
+
+        const baseName = (colConfig.name || propertyName).toUpperCase();
+        return colConfig.index ? `${baseName}*` : baseName;
+    }
+
+
 
 
 

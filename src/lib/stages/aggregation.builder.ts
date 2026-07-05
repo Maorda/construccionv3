@@ -1,11 +1,12 @@
 import { Injectable, Scope, BadRequestException } from "@nestjs/common";
 import { PipelineOrchestrator } from "./pipeline.registry";
 import { GroupConfig, LookupConfig, PipelineStage } from "./interfaces/query-stage.interface";
+import { StageUtils } from "./StageUtils";
 
 
 // 🟢 CRÍTICO: Definimos el Scope como TRANSIENT para que cada inyección 
 // genere un Builder único y evitar contaminación de memoria entre peticiones.
-@Injectable({ scope: Scope.TRANSIENT })
+@Injectable()
 export class AggregationBuilder {
     private pipeline: PipelineStage[] = [];
 
@@ -14,33 +15,25 @@ export class AggregationBuilder {
     ) { }
 
     match(criteria: Record<string, any>): this {
-        if (!criteria || typeof criteria !== 'object') {
-            throw new BadRequestException("El criterio de '$match' debe ser un objeto válido.");
-        }
+        StageUtils.validateObject(criteria, '$match');
         this.pipeline.push({ $match: criteria });
         return this;
     }
 
     lookup(config: LookupConfig): this {
-        if (!config || !config.from || !config.localField || !config.foreignField || !config.as) {
-            throw new BadRequestException("Configuración incompleta para el stage '$lookup'.");
-        }
+        StageUtils.validateObject(config, '$lookup');
         this.pipeline.push({ $lookup: config });
         return this;
     }
 
     project(criteria: Record<string, any>): this {
-        if (!criteria || typeof criteria !== 'object') {
-            throw new BadRequestException("La proyección de '$project' debe ser un objeto.");
-        }
+        StageUtils.validateObject(criteria, '$project');
         this.pipeline.push({ $project: criteria });
         return this;
     }
 
     sort(criteria: Record<string, any>): this {
-        if (!criteria || typeof criteria !== 'object') {
-            throw new BadRequestException("El ordenamiento de '$sort' debe ser un objeto.");
-        }
+        StageUtils.validateObject(criteria, '$sort');
         this.pipeline.push({ $sort: criteria });
         return this;
     }
@@ -55,35 +48,28 @@ export class AggregationBuilder {
     }
 
     unwind(criteria: string | { path: string }): this {
-        if (!criteria) {
-            throw new BadRequestException("El stage '$unwind' requiere un path o una configuración.");
+        if (typeof criteria === 'string') {
+            criteria = { path: criteria };
         }
+        StageUtils.validateObject(criteria, '$unwind');
         this.pipeline.push({ $unwind: criteria });
         return this;
     }
 
     addFields(criteria: Record<string, any>): this {
-        if (!criteria || typeof criteria !== 'object') {
-            throw new BadRequestException("Los campos de '$addFields' deben venir en formato de objeto.");
-        }
+        StageUtils.validateObject(criteria, '$addFields');
         this.pipeline.push({ $addFields: criteria });
         return this;
     }
 
     limit(criteria: number): this {
-        // 🟢 VALIDACIÓN DE PRODUCCIÓN: Evitar números negativos o no enteros
-        if (typeof criteria !== 'number' || criteria <= 0) {
-            throw new BadRequestException("El límite de '$limit' debe ser un número entero mayor a 0.");
-        }
+        StageUtils.validateObject(criteria, '$limit');
         this.pipeline.push({ $limit: Math.floor(criteria) });
         return this;
     }
 
     skip(criteria: number): this {
-        // 🟢 VALIDACIÓN DE PRODUCCIÓN: Evitar saltos negativos
-        if (typeof criteria !== 'number' || criteria < 0) {
-            throw new BadRequestException("El salto de '$skip' debe ser un número entero mayor o igual a 0.");
-        }
+        StageUtils.validateObject(criteria, '$skip');
         this.pipeline.push({ $skip: Math.floor(criteria) });
         return this;
     }
@@ -96,9 +82,7 @@ export class AggregationBuilder {
     }
 
     async runStages(data: any[]): Promise<any[]> {
-        if (!Array.isArray(data)) {
-            throw new BadRequestException("Los datos a procesar en el pipeline deben ser un array.");
-        }
+        StageUtils.validateArray(data, '$runStages');
 
         // Si no hay stages, devolvemos la data original intacta de forma segura
         if (this.pipeline.length === 0) return [...data];

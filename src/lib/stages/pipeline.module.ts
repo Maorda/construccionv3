@@ -11,6 +11,7 @@ import { QueryEngine } from '../core/query/query.engine'; // 🌟 Añadido el mo
 import * as AllStages from './index';
 import * as AllFilters from './filter.operators';
 import * as AllTransforms from './transform.operators';
+import { AggregationFactory } from './interfaces/aggregation.factory';
 
 // 3. Extraemos dinámicamente las clases de los namespaces
 // Object.values() convierte las exportaciones en un array inyectable por NestJS
@@ -29,6 +30,7 @@ const TRANSFORMS = Object.values(AllTransforms);
         // 5. Registramos los motores principales
         ExpressionEngine,
         PipelineOrchestrator,
+        AggregationFactory,
         AggregationBuilder,
         QueryEngine, // 🌟 Registrado para que pueda ser inyectado en el Repositorio
 
@@ -51,6 +53,7 @@ const TRANSFORMS = Object.values(AllTransforms);
     ],
     exports: [
         AggregationBuilder,
+        AggregationFactory,
         QueryEngine // 🌟 Exportamos el QueryEngine para que SheetOdmModule lo consuma
     ]
 })

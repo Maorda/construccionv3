@@ -9,35 +9,18 @@ export class MatchStage implements IQueryStage {
     public readonly operator = '$match';
     private readonly logger = new Logger(MatchStage.name);
 
-
+    constructor(private readonly engine: ExpressionEngine) { }
 
     async execute(data: any[], config: any): Promise<any[]> {
+        // 2. Usamos el motor para filtrar. 
+        // evaluateFilter ya maneja $gt, $in, $and, anidados, etc.
         return data.filter((row) => {
-            return Object.entries(config).every(([key, criteria]) => {
-                const rowValue = row[key];
-
-                // 1. Si el criterio es un objeto con operadores (como $in)
-                if (criteria && typeof criteria === 'object' && !Array.isArray(criteria)) {
-
-                    // Manejo del operador $in
-                    if ('$in' in criteria) {
-                        const allowedValues = (criteria as any).$in;
-                        return Array.isArray(allowedValues) && allowedValues.includes(rowValue);
-                    }
-
-                    // Puedes agregar más operadores aquí (ej. $eq, $gt, etc.)
-                }
-
-                // 2. Fallback: Igualdad estricta (para cuando no hay operadores)
-                return rowValue === criteria;
-            });
+            return this.engine.evaluateFilter(row, config);
         });
     }
 
     validate(config: any): void {
-        if (!config || typeof config !== 'object') {
-            throw new Error("La configuración del operador '$match' debe ser un objeto de criterios válido.");
-        }
+        StageUtils.validateObject(config, '$match');
     }
 }
 
@@ -48,6 +31,7 @@ export class ProjectStage implements IQueryStage {
 
     async execute(data: any[], config: any): Promise<any[]> {
         return data.map(item => {
+            console.log('[DEBUG] Engine Config:', config);
             // Delegamos la ejecución del objeto completo al engine
             const projected = this.engine.execute(item, config) || {};
 

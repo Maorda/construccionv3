@@ -7,25 +7,25 @@ export class PipelineOrchestrator {
     private readonly logger = new Logger(PipelineOrchestrator.name);
     private readonly stagesMap: Map<string, IQueryStage> = new Map();
 
-    constructor(@Optional() @Inject(PIPELINE_STAGE) private readonly stages: IQueryStage[]) {
+    constructor(@Inject(PIPELINE_STAGE) private readonly stages: IQueryStage[]) {
 
         if (!Array.isArray(this.stages)) {
-            console.error('ERROR CRÍTICO: stages no es un array, es:', typeof this.stages, this.stages);
+            this.logger.error('ERROR CRÍTICO: PIPELINE_STAGE no está bien inyectado. Asegúrate de configurar el multi-provider.');
+            return;
         }
-        // Mapeo automático inteligente basado en el nombre de la clase
-        /* this.stages.forEach(stage => {
-             const className = stage.constructor.name;
-             const stageName = className.replace('Stage', '');
 
-            // 🟢 SOLUCIÓN AL BUG: Convierte solo la primera letra a minúscula para soportar camelCase
-            // Ejemplo: "AddFieldsStage" -> "AddFields" -> "$addFields"
+        // 🟢 DESCOMENTADO: Ahora registramos los stages al instanciar
+        this.stages.forEach(stage => {
+            const className = stage.constructor.name;
+            const stageName = className.replace('Stage', '');
+
+            // Convertimos: "MatchStage" -> "Match" -> "$match"
             const operator = `$${stageName.charAt(0).toLowerCase()}${stageName.slice(1)}`;
 
             this.stagesMap.set(operator, stage);
 
-            // Log de depuración para asegurar que los multi-providers se carguen correctamente en tu NPM library
             this.logger.log(`[PipelineOrchestrator] Stage registrado: ${operator} -> ${className}`);
-        });*/
+        });
     }
 
     public async executePipeline(data: any[], pipeline: Record<string, any>[]): Promise<any[]> {

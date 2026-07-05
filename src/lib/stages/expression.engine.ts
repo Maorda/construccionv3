@@ -33,10 +33,21 @@ export class ExpressionEngine {
         if (Array.isArray(projection)) return projection.map(item => this.execute(record, item));
 
         const result: any = {};
+        const rawRecord = this.extractRawData(record); // Obtenemos la data limpia una vez
+
         for (const key in projection) {
             if (!projection.hasOwnProperty(key)) continue;
 
             const expression = projection[key];
+
+            // 🟢 SOLUCIÓN: Interceptamos el flag de inclusión
+            // Si el valor es 1 (o true), copiamos el campo directamente del record original.
+            if (expression === 1 || expression === true) {
+                result[key] = rawRecord[key];
+                continue;
+            }
+
+            // Lógica existente para operadores y expresiones
             if (this.isOperatorObject(expression)) {
                 const operatorKey = Object.keys(expression)[0];
                 result[key] = this.runOperator(operatorKey, expression[operatorKey], record);

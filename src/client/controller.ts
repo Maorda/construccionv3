@@ -1,7 +1,7 @@
 import { Body, Controller, Get, HttpCode, HttpStatus, Injectable, NotFoundException, Param, Post, Query, UsePipes, ValidationPipe } from "@nestjs/common";
 import { Logger } from "@nestjs/common";
-import { InjectModel, Model } from "@sheetOdm/core/model/model.factory";
-import { CreateObreroDto, ObreroEntity } from "./obrero.entity";
+import { FilterQuery, InjectModel, Model } from "@sheetOdm/core/model/model.factory";
+import { CreateObreroDto, GetAdelantosReportDto, ObreroEntity } from "./obrero.entity";
 import { AdelantoEntity, CreateAdelantoDto } from "./adelanto.entity";
 
 @Injectable()
@@ -9,90 +9,59 @@ export class PlanillaTareoService {
     private readonly logger = new Logger(PlanillaTareoService.name);
 
     constructor(
-        @InjectModel(ObreroEntity) private readonly obreroModel: Model<ObreroEntity>,
-        @InjectModel(AdelantoEntity) private readonly adelantoModel: Model<AdelantoEntity>,
+        @InjectModel(AdelantoEntity)
+        private readonly adelantoModel: Model<AdelantoEntity>
     ) { }
 
-    // --- Inserciones ---
+    async getAdelantosReporte(obreroId: string, minMonto: number = 99) {
+        // 1. Usamos la propiedad correcta 'idObrero' definida en la entidad
+        const adelantos = await this.adelantoModel.find({ idObrero: obreroId });
 
-    async createObrero(dto: CreateObreroDto) {
-        const nuevoObrero = await this.obreroModel.save(dto);
-        return { message: 'Obrero registrado exitosamente', data: nuevoObrero };
+        // 2. Ejecutamos la agregación
+        return await this.adelantoModel.aggregate()
+            .match({ monto: { $gt: minMonto } })
+            .project({
+                monto: 1,
+                fecha: 1,
+                // Si necesitas el idObrero en el resultado, agrégalo aquí:
+                idObrero: 1
+            })
+            .sort({ monto: -1 })
+            .runStages(adelantos);
     }
 
-    async createAdelanto(idObrero: string, dto: CreateAdelantoDto) {
-        // Validación del padre
-        const obrero = await this.obreroModel.findOne({ id: idObrero });
-        if (!obrero) throw new NotFoundException(`Obrero con ID ${idObrero} no existe.`);
-
-        const nuevoAdelanto = await this.adelantoModel.save({
-            ...dto,
-            idObrero // Forzamos la relación
-        });
-
-        return { message: 'Adelanto asignado correctamente', data: nuevoAdelanto };
+    async crearAdelanto(dto: CreateAdelantoDto) {
+        return await this.adelantoModel.save(dto);
     }
 
-    // --- Consultas (Genéricas) ---
-
-    async getAllObreros() {
-        return await this.obreroModel.find();
+    async buscarAdelantos(filtro: FilterQuery<AdelantoEntity>) {
+        return await this.adelantoModel.find(filtro);
     }
-
-    /**
-     * Consulta flexible: Si 'withAdelantos' es true, el repo 
-     * ejecutará automáticamente el populate configurado en el entity.
-     */
-    async getObreroById(id: string, withAdelantos: boolean = false) {
-        const options = withAdelantos ? { populate: 'adelantos' } : {};
-
-        const obrero = await this.obreroModel.findOne({ id }, options as any);
-
-        if (!obrero) {
-            throw new NotFoundException(`Obrero con ID ${id} no encontrado.`);
-        }
-
-        return obrero;
-    }
-
 }
 
 
 @Controller('admin-planilla')
 export class PlanillaAdminController {
-    constructor(private readonly planillaService: PlanillaTareoService) { }
+    constructor(private readonly adelantoService: PlanillaTareoService) { }
 
     @Post()
-    @HttpCode(HttpStatus.CREATED)
-    createObrero(@Body() dto: CreateObreroDto) {
-        return this.planillaService.createObrero(dto);
+    async create(@Body() body: CreateAdelantoDto) {
+        return await this.adelantoService.crearAdelanto(body);
     }
 
-    @Post(':id/adelantos')
-    @HttpCode(HttpStatus.CREATED)
-    createAdelanto(@Param('id') id: string, @Body() dto: CreateAdelantoDto) {
-        return this.planillaService.createAdelanto(id, dto);
+    @Post('search')
+    async find(@Body() query: FilterQuery<AdelantoEntity>) {
+        return await this.adelantoService.buscarAdelantos(query);
     }
 
-    @Get()
-    findAll() {
-        return this.planillaService.getAllObreros();
+    @Post('reporte-adelantos')
+    async getReporte(@Body() body: GetAdelantosReportDto) {
+        // Si el usuario no envía minMonto, el servicio usará el valor por defecto (0)
+        return await this.adelantoService.getAdelantosReporte(
+            body.obreroId,
+            body.minMonto ?? 0
+        );
     }
-
-    /**
-     * Endpoint flexible: 
-     * /admin-planilla/123 -> Devuelve solo el obrero
-     * /admin-planilla/123?full=true -> Devuelve obrero con adelantos
-     */
-    @Get(':id')
-    findOne(
-        @Param('id') id: string,
-        @Query('full') full?: string // Captura query param '?full=true'
-    ) {
-        const withAdelantos = full === 'true';
-        return this.planillaService.getObreroById(id, withAdelantos);
-    }
-
 
 
 }

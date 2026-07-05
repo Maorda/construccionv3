@@ -51,6 +51,9 @@ import { SheetCacheModule } from './core/cache/cache.module';
 import { createModel } from './core/model/model.factory';
 import { SheetOdmSerializeInterceptor } from './core/interceptors/sheet-odm-serialize.interceptor';
 import { ModelRegistry } from './core/model/model.registry';
+import { PipelineOrchestrator } from './stages/pipeline.registry';
+import { AggregationBuilder } from './stages/aggregation.builder';
+import { AggregationFactory } from './stages/interfaces/aggregation.factory';
 
 // ============================================================================
 // AGRUPACIONES DE PROVIDERS (Mantenidas para legibilidad)
@@ -68,6 +71,9 @@ const CORE_SHARED_SERVICES: Provider[] = [
   SheetDocumentHydrator,
   SheetDataGateway,
   InfrastructureProvisioner,
+  PipelineOrchestrator, // Dependencia de AggregationBuilder
+  AggregationBuilder,   // El que causaba el error
+  AggregationFactory,   // La factoría para el estilo Mongoose
 ];
 
 const INTERNAL_SERVICES: Provider[] = [

@@ -15,6 +15,9 @@ import { Cache } from 'cache-manager';
 import { CacheKeys } from '../cache/cache.keys';
 import { IdFactory } from '@sheetOdm/shared/id.generator';
 import { EntityStore } from '../store/entity-store';
+import { AggregationBuilder } from '../../stages/aggregation.builder';
+import { AggregationFactory } from '../../stages/interfaces/aggregation.factory';
+
 export const entityDataMap = new WeakMap<any, any>();
 export class SheetsRepository<T extends object, U extends SheetDocument<T> = SheetDocument<T>> {
     private readonly logger: Logger;
@@ -26,6 +29,7 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
     private readonly mutationEngine: MutationEngine;
     private readonly populateEngine: PopulateEngine;
     private readonly cacheManager: Cache;
+    private readonly aggregationFactory: AggregationFactory;
 
     constructor(
         public readonly entityClass: ClassType<T>,
@@ -40,6 +44,7 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
         this.mutationEngine = core.mutationEngine;
         this.populateEngine = core.populateEngine;
         this.cacheManager = core.cacheManager;
+        this.aggregationFactory = core.aggregationFactory;
         this.sheetName = this.metadata.getSchema(this.entityClass).sheetName;
     }
 
@@ -530,43 +535,10 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
         }));
     }
 
-    /**
-     * Helper para convertir índice numérico de columna a letra (ej: 1 -> A, 27 -> AA)
-     */
-    private numberToColumn(num: number): string {
-        let letter = '';
-        while (num > 0) {
-            const charCode = (num - 1) % 26;
-            letter = String.fromCharCode(65 + charCode) + letter;
-            num = Math.floor((num - 1) / 26);
-        }
-        return letter;
-    }
-    private translateRawToCamelCase(rawRow: any): Partial<T> {
-        const hydrated: any = {};
 
-        // Obtener la metadata detallada de las columnas desde el prototipo de la Entidad
-        const details = Reflect.getMetadata(SHEETS_COLUMN_DETAILS, this.entityClass.prototype) || {};
 
-        // Iteramos sobre las llaves reales de TypeScript definidas en el código del desarrollador
-        for (const [tsPropertyName, config] of Object.entries(details)) {
-            // Obtenemos el nombre físico de la columna en Google Sheets configurado en el decorador.
-            // Si el desarrollador omitió el 'name', hacemos fallback a la propiedad de TS.
-            const dbColumnName = (config as any).name || tsPropertyName;
-
-            if (rawRow[dbColumnName] !== undefined) {
-                hydrated[tsPropertyName] = rawRow[dbColumnName];
-            }
-        }
-
-        // Preservar de forma segura el índice físico de la fila mapeado al Symbol global.
-        // Esto es vital porque el constructor de tu DocumentModel evalúa este Symbol 
-        // para marcar la entidad como persistida (__isNew = false).
-        if (rawRow.__row !== undefined) {
-            hydrated[ROW_INDEX_SYMBOL] = rawRow.__row;
-        }
-
-        return hydrated;
+    createAggregation(): AggregationBuilder {
+        return this.aggregationFactory.create();
     }
 
 
