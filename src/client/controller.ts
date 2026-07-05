@@ -31,6 +31,7 @@ export class PlanillaTareoService {
     }
 
     async crearAdelanto(dto: CreateAdelantoDto) {
+        this.logger.log(`Registrando nuevo adelanto para obrero: ${dto.idObrero}`);
         return await this.adelantoModel.save(dto);
     }
 

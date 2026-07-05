@@ -169,26 +169,40 @@ export class OutboxProcessor implements OnApplicationBootstrap, OnApplicationShu
         const startTime = Date.now();
 
         try {
-            // Re-instanciamos respetando el orden cronológico estricto que vino desde la base de datos
+            // 🟢 REHIDRATACIÓN: Convertimos el JSON plano en una instancia completa
             const documents = tasks.map(t => {
-                const rawData = t.payload; // 🚀 Directo al payload real
-                this.logger.debug(`[PAYLOAD DESDE OUTBOX DB]: ${JSON.stringify(rawData)}`);
-                const doc = repo.create(rawData);
+                const rawData = t.payload;
+
+                // 1. Verificación defensiva: Si el payload está vacío, no intentamos procesar
+                if (!rawData || Object.keys(rawData).length === 0) {
+                    throw new Error(`Payload corrupto o vacío en tarea ${t.id}`);
+                }
+
+                // 2. Creamos una instancia vacía de la Entidad
+                const doc = new entityClass();
+
+                // 3. Copiamos los datos
+                Object.assign(doc, rawData);
+
+                // 4. RESTAURACIÓN DE PROTOTIPO: 
+                // Esto es la clave. Vinculamos el prototipo del DocumentModel 
+                // para que methods como toJSON() estén disponibles.
+                Object.setPrototypeOf(doc, Object.getPrototypeOf(repo.create({})));
+
+                // 5. Restauramos metadatos de fila si existen
                 if (rawData._row !== undefined) {
                     doc.markAsSaved(rawData._row);
                 }
+
                 return doc;
             });
 
-            // 🚀 Envío masivo HTTP a Google Sheets sin afectar el pool transaccional de Postgres
+            // 🚀 Envío masivo
             await repo.commitBulk(documents);
             await this.cacheManager.del(CacheKeys.SHEET_DATA(entityName));
-
             await this.markAs(tasks, OutboxStatus.COMPLETED);
 
-            const duration = Date.now() - startTime;
-            await this.markAs(tasks, OutboxStatus.COMPLETED);
-            this.logger.log(`✅ [GAS SYNC SUCCESS] Lote de ${tasks.length} registros de [${entityName}] sincronizados. | ⏱️ Latencia: ${duration}ms`);
+            this.logger.log(`✅ [GAS SYNC SUCCESS] Lote de ${tasks.length} registros de [${entityName}] sincronizados.`);
         } catch (error: any) {
             const duration = Date.now() - startTime;
             this.logger.error(`⚠️ [GAS SYNC FAILED] Lote de ${entityName} falló. | ⏱️ Tiempo: ${duration}ms. Aplicando Backoff individual...`);
