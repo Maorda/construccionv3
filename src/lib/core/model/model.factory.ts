@@ -1,10 +1,11 @@
 import { Inject, Logger } from '@nestjs/common';
 import { SheetDocument } from '../wrapper/sheet-document';
 import { SheetsRepository } from '../repository/sheets.repository';
-import { ROW_INDEX_SYMBOL, SHEETS_COLUMN_DETAILS, SHEETS_RELATIONS_LIST } from '../../shared/constants/constants';
+import { ROW_INDEX_SYMBOL, SHEETS_COLUMN_DETAILS, SHEETS_PRIMARY_KEY, SHEETS_RELATIONS_LIST } from '../../shared/constants/constants';
 import { ClassType } from '../types/common.types';
 import { MetadataRegistry } from '../metadata/metadata.registry';
 import { AggregationBuilder } from '../../stages/aggregation.builder';
+import { IdFactory } from '../../shared/id.generator';
 
 // ============================================================================
 // TIPOS Y OPCIONES (Tipado Estricto Mongoose-like)
@@ -106,16 +107,35 @@ export function createModel<T extends object>(
 ): Model<T> {
 
     class DocumentModel {
-        // Tipos de uso interno. No se inicializan aquí para evitar que sean enumerables
         declare private __isNew: boolean;
         declare private __modifiedPaths: Set<string>;
-        private readonly logger = new Logger(DocumentModel.name);
-
-
+        private readonly logger: Logger;
 
         constructor(data: Partial<T> = {}) {
-            this.logger.debug(`[FLOW-2] Datos recibidos en Constructor: ${Object.keys(data).length} keys. Keys: ${Object.keys(data)}`);
-            // 1. Configuramos estado interno
+            Object.defineProperty(this, 'logger', {
+                value: new Logger(`Model<${entityClass.name}>`),
+                writable: false,
+                enumerable: false,
+            });
+
+            this.logger.debug(`[FLOW-2] Datos recibidos en Constructor: ${Object.keys(data).length} keys.`);
+
+            Object.assign(this, data);
+            const primaryKeyProperty = (Reflect.getMetadata(SHEETS_PRIMARY_KEY, entityClass) || 'id') as string;
+
+            if (!(this as any)[primaryKeyProperty]) {
+                const details = Reflect.getMetadata(SHEETS_COLUMN_DETAILS, entityClass) || {};
+                const pkConfig = details[primaryKeyProperty];
+
+                if (pkConfig?.generated === 'short-id') {
+                    (this as any)[primaryKeyProperty] = IdFactory.createShort();
+                    this.logger.debug(`[FLOW-ID] Generado short-id automático en constructor: ${(this as any)[primaryKeyProperty]}`);
+                } else if (pkConfig?.generated === 'uuid' || pkConfig?.generated === 'increment') {
+                    (this as any)[primaryKeyProperty] = IdFactory.createUUID();
+                    this.logger.debug(`[FLOW-ID] Generado UUID automático en constructor: ${(this as any)[primaryKeyProperty]}`);
+                }
+            }
+
             Object.defineProperty(this, '__isNew', {
                 value: data[ROW_INDEX_SYMBOL as keyof Partial<T>] === undefined,
                 writable: true,
@@ -127,16 +147,7 @@ export function createModel<T extends object>(
                 enumerable: false,
             });
 
-            // 2. Asignamos los datos
 
-            Object.assign(this, data);
-            this.logger.debug(`[FLOW-3] Instancia post-asignación (Nombre): ${this['nombre'] || 'UNDEFINED'}`);
-
-            // --- INSTRUMENTACIÓN ---
-            console.log(`🔍 [DocumentModel] Instancia creada con keys:`, Object.keys(this));
-            console.log(`🔍 [DocumentModel] Datos asignados (id):`, (this as any).id);
-            console.log(`🔍 [DocumentModel] Datos asignados (nombre):`, (this as any).nombre);
-            // -----------------------
 
             return new Proxy(this, {
                 set(target, prop, value, receiver) {
@@ -146,50 +157,82 @@ export function createModel<T extends object>(
                     return Reflect.set(target, prop, value, receiver);
                 }
             });
-
         }
 
+        // ====================================================================
+        // 📝 SERIALIZACIÓN BLINDADA CORREGIDA Y AUDITADA
+        // ====================================================================
         toJSON() {
-            const plain: any = {};
-            const details = Reflect.getMetadata(SHEETS_COLUMN_DETAILS, entityClass.prototype) || {};
+            const plain: Record<string, any> = {};
+
+            // 💡 SOLUCIÓN: Leemos directamente desde 'entityClass' (Constructor), no desde el prototype
+            const details = Reflect.getMetadata(SHEETS_COLUMN_DETAILS, entityClass) || {};
             const descriptors = Object.getOwnPropertyDescriptors(entityClass.prototype);
+            const metadataKeys = Object.keys(details);
 
-            // 1. Columnas base (Nombres limpios de TypeScript)
-            for (const col of Object.keys(details)) {
-                plain[col] = (this as any)[col] !== undefined ? (this as any)[col] : null;
-            }
+            this.logger.debug(`[FLOW-METADATA] Inspeccionando @Column en [${entityClass.name}]. Encontradas: [${metadataKeys.join(', ')}]`);
 
-            // 2. Virtuals / Getters definidos en la entidad
-            for (const key of Object.keys(descriptors)) {
-                if (descriptors[key].get && key !== 'constructor') {
-                    plain[key] = (this as any)[key];
+            // 🟢 INTENTO 1: Vía Metadatos de Decoradores (@Column)
+            if (metadataKeys.length > 0) {
+                for (const col of metadataKeys) {
+                    plain[col] = (this as any)[col] !== undefined ? (this as any)[col] : null;
+                }
+            } else {
+                // 🛡️ FALLBACK DE SEGURIDAD
+                this.logger.warn(`⚠️ [FLOW-SERIALIZE] No se hallaron metadatos @Column en [${entityClass.name}]. Usando fallback de seguridad por reflexión superficial.`);
+                for (const key of Object.keys(this)) {
+                    if (typeof (this as any)[key] !== 'function' && !key.startsWith('__')) {
+                        plain[key] = (this as any)[key];
+                    }
                 }
             }
 
-            // 3. Relaciones (Ej: array de adelantos)
-            const relations = Reflect.getOwnMetadata(SHEETS_RELATIONS_LIST, entityClass.prototype) || [];
+            // 🔵 VIRTUALS: Getters definidos en la entidad
+            let virtualsCount = 0;
+            for (const key of Object.keys(descriptors)) {
+                if (descriptors[key].get && key !== 'constructor') {
+                    plain[key] = (this as any)[key];
+                    virtualsCount++;
+                }
+            }
+            if (virtualsCount > 0) {
+                this.logger.debug(`[FLOW-SERIALIZE] Mapeados ${virtualsCount} Virtual Getters en [${entityClass.name}].`);
+            }
+
+            // 🟣 RELACIONES: Mapeamos el Target del constructor también si aplica
+            const relations = Reflect.getOwnMetadata(SHEETS_RELATIONS_LIST, entityClass) ||
+                Reflect.getOwnMetadata(SHEETS_RELATIONS_LIST, entityClass.prototype) || [];
+
             for (const rel of relations) {
-                if ((this as any)[rel] !== undefined) plain[rel] = (this as any)[rel];
+                if ((this as any)[rel] !== undefined) {
+                    plain[rel] = (this as any)[rel];
+                }
             }
 
             return plain;
         }
 
-        // ====================================================================
-        // 📝 SERIALIZACIÓN PARA BASE DE DATOS (Google Sheets Outbox)
-        // ====================================================================
         toSheetRow() {
-            const plain: any = {};
-            const details = Reflect.getMetadata(SHEETS_COLUMN_DETAILS, entityClass.prototype) || {};
+            const plain: Record<string, any> = {};
 
-            // Mapeo inverso: De llaves TS a Cabeceras reales (con asteriscos)
-            for (const key of Object.keys(details)) {
-                const dbColumnName = MetadataRegistry.prototype.getDatabaseColumnName(entityClass, key);
+            // 💡 SOLUCIÓN: Mismo cambio crítico aquí para la persistencia física en Sheets
+            const details = Reflect.getMetadata(SHEETS_COLUMN_DETAILS, entityClass) || {};
+            const metadataKeys = Object.keys(details);
 
-                plain[dbColumnName] = (this as any)[key] !== undefined ? (this as any)[key] : null;
+            if (metadataKeys.length > 0) {
+                for (const key of metadataKeys) {
+                    const dbColumnName = MetadataRegistry.prototype.getDatabaseColumnName(entityClass, key);
+                    plain[dbColumnName] = (this as any)[key] !== undefined ? (this as any)[key] : null;
+                }
+            } else {
+                this.logger.warn(`⚠️ [FLOW-SERIALIZE] toSheetRow no encontró metadatos en [${entityClass.name}]. Mapeando llaves nativas.`);
+                for (const key of Object.keys(this)) {
+                    if (typeof (this as any)[key] !== 'function' && !key.startsWith('__')) {
+                        plain[key] = (this as any)[key];
+                    }
+                }
             }
 
-            // Inyectar el número de fila para que Sheets sepa qué actualizar
             if (this.rowNumber !== undefined) {
                 plain.__row = this.rowNumber;
             }
@@ -198,12 +241,9 @@ export function createModel<T extends object>(
         }
 
         // ====================================================================
-        // MÉTODOS DE INSTANCIA (Capacidad Active Record)
-        // Optimizados en el prototipo para no consumir memoria redundante
+        // MÉTODOS DE INSTANCIA
         // ====================================================================
-
         async save(): Promise<T & SheetDocument<T>> {
-
             const saved = await repo.save(this as any);
             Object.assign(this, saved);
             return this as unknown as T & SheetDocument<T>;
@@ -217,7 +257,6 @@ export function createModel<T extends object>(
             return (this as any)[key];
         }
 
-
         get rowNumber(): number | undefined {
             return (this as any)[ROW_INDEX_SYMBOL];
         }
@@ -225,25 +264,22 @@ export function createModel<T extends object>(
         markAsSaved(rowNum: number): void {
             this.__isNew = false;
             (this as any)[ROW_INDEX_SYMBOL] = rowNum;
+            this.logger.debug(`[FLOW-WAL] Documento marcado como guardado en Sheets. Fila asignada: ${rowNum}`);
         }
 
         // ====================================================================
-        // MÉTODOS ESTÁTICOS (Delegación al Repositorio)
-        // Ahora con tipado fuerte inferido desde T
+        // MÉTODOS ESTÁTICOS
         // ====================================================================
-
         static async save(data: Partial<T>): Promise<T & SheetDocument<T>> {
             const instance = new DocumentModel(data);
             return instance.save();
         }
 
         static async find(filter?: FilterQuery<T>, options?: QueryOptions<T>) {
-            console.log("document model find", repo.find(filter, options));
             return repo.find(filter, options);
         }
 
         static async findOne(filter?: FilterQuery<T>, options?: QueryOptions<T>) {
-            console.log("document model find one", repo.findOne(filter, options));
             return repo.findOne(filter, options);
         }
 
@@ -252,14 +288,10 @@ export function createModel<T extends object>(
         }
 
         static aggregate(): AggregationBuilder {
-            // repo es la instancia que pasaste al crear el modelo
             return repo.createAggregation();
         }
     }
 
-    // 🚀 MAGIA DE HERENCIA: Vinculamos el prototipo de DocumentModel al de la Entidad.
-    // Esto permite que métodos customizados en tu `ObreroEntity` o `AdelantoEntity`
-    // sigan funcionando perfectamente en los resultados de las consultas.
     Object.setPrototypeOf(DocumentModel.prototype, entityClass.prototype);
 
     return DocumentModel as unknown as Model<T>;

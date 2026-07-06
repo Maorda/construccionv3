@@ -1,5 +1,4 @@
 import { Injectable } from '@nestjs/common';
-import { ModuleRef } from '@nestjs/core';
 import { AggregationBuilder } from '../aggregation.builder';
 import { PipelineOrchestrator } from '../pipeline.registry';
 

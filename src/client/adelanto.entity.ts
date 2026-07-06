@@ -31,7 +31,7 @@ export class CreateAdelantoDto {
 @Table('ADELANTOS_DIARIOS', { dto: CreateAdelantoDto })
 export class AdelantoEntity {
     @PrimaryKey()
-    @Column({ name: 'ID_ADELANTO', generated: 'uuid', index: true })
+    @Column({ name: 'ID_ADELANTO', generated: 'short-id', index: true })
     id: string;
 
     @Column({ name: 'ID_PLANILLA', required: true })
