@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { FilterQuery, QueryOptions } from '../model/model.factory';
 import { IQueryStage, PipelineStage } from '../../stages/interfaces/query-stage.interface';
 import { PIPELINE_STAGE } from '../../stages/pipeline.constants';
+import { DateTransformer } from '../../stages/transform.operators';
 
 export type AggregationPipeline = PipelineStage[];
 
@@ -40,7 +41,11 @@ export class QueryEngine implements IQueryEngine {
 
         // 🔍 LOG DE ENTRADA AL ENGINE: Registra qué le pide el repositorio al motor
         this.logger.debug(`[execute] Solicitud de consulta. Registros entrantes en memoria: ${data?.length || 0}. Filtro base: ${JSON.stringify(filter)}`);
+        const normalizedFilter = this.normalizeFilter(filter);
 
+        if (normalizedFilter && Object.keys(normalizedFilter).length > 0) {
+            pipeline.push({ $match: normalizedFilter });
+        }
         // Traducimos una consulta común (findOne, findMany) a un pipeline estructurado
         if (filter && Object.keys(filter).length > 0) {
             pipeline.push({ $match: filter });
@@ -143,5 +148,23 @@ export class QueryEngine implements IQueryEngine {
                 throw new Error(`[QueryEngine] Validación fallida en la etapa "${operator}": ${error.message}`);
             }
         }
+    }
+    private normalizeFilter(filter: any): any {
+        if (!filter) return filter;
+
+        // Si detecta un string de fecha en el filtro, lo normaliza a formato de sistema (YYYY-MM-DD)
+        if (typeof filter === 'string' && /^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(filter)) {
+            return DateTransformer.fromSheet(filter);
+        }
+
+        if (Array.isArray(filter)) return filter.map(i => this.normalizeFilter(i));
+        if (typeof filter === 'object') {
+            const normalized: any = {};
+            for (const [key, val] of Object.entries(filter)) {
+                normalized[key] = this.normalizeFilter(val);
+            }
+            return normalized;
+        }
+        return filter;
     }
 }

@@ -272,21 +272,37 @@ export class MetadataRegistry {
             // 🚀 FIX: Forzamos el cast a string porque sabemos que el decorador siempre define un nombre
             const dbKey = this.getDatabaseColumnName(entityClass, propertyName);
 
-            // Verificamos que rawData tenga esa propiedad y la asignamos
+            let rawValue: any;
+
+            // 1. Extraemos el valor ya sea por su nombre de columna en BD o su nombre de propiedad en la clase
             if (rawData && Object.prototype.hasOwnProperty.call(rawData, dbKey)) {
-                mappedObject[propertyName] = rawData[dbKey];
+                rawValue = rawData[dbKey];
             } else if (rawData && Object.prototype.hasOwnProperty.call(rawData, propertyName)) {
-                // Fallback por si la propiedad ya viene mapeada con el nombre de clase
-                mappedObject[propertyName] = rawData[propertyName];
+                rawValue = rawData[propertyName];
+            }
+
+            // 2. 🛡️ INTERCEPCIÓN Y NORMALIZACIÓN: Si encontramos un valor, lo normalizamos antes de asignarlo
+            if (rawValue !== undefined) {
+                mappedObject[propertyName] = this.normalizeValue(rawValue);
             }
         }
 
-        // Aseguramos el símbolo interno
-        if (rawData[ROW_INDEX_SYMBOL]) {
+        // Aseguramos el símbolo interno para el tracking de la fila en Sheets
+        if (rawData && rawData[ROW_INDEX_SYMBOL]) {
             mappedObject[ROW_INDEX_SYMBOL] = rawData[ROW_INDEX_SYMBOL];
         }
 
         return mappedObject as Partial<T>;
+    }
+    private normalizeValue(val: any): any {
+        // Usamos Regex para validar el estándar ISO: YYYY-MM-DDTHH:mm:ss
+        // Esto evita falsos positivos con IDs o códigos que contengan la letra "T" o "Z" (ej: "4ON8A9AL")
+        if (typeof val === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(val)) {
+            return val.split('T')[0];
+        }
+
+        // Aquí podrías agregar más normalizaciones globales en el futuro (ej: trim a strings, booleanos, etc.)
+        return val;
     }
     getExpectedHeadersForGas<T extends object>(entityClass: ClassType<T>): string[] {
         const schema = this.getSchema(entityClass);

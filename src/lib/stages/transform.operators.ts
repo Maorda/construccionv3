@@ -1,5 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import dayjs from 'dayjs';
+import customParseFormat from 'dayjs/plugin/customParseFormat';
+dayjs.extend(customParseFormat);
 import { IExpressionOperator } from './IExpressionOperator';
 
 // =========================================================================
@@ -234,5 +236,26 @@ export class AggregateOperator implements IExpressionOperator {
             case 'max': return Math.max(...nums);
             default: return sum;
         }
+    }
+}
+@Injectable()
+export class DateTransformer {
+    // Estándar de entrada (el que llega de Insomnia / Sistema)
+    static readonly INPUT_FORMAT = 'YYYY-MM-DD';
+    // Estándar de salida (el que Sheets exige)
+    static readonly SHEET_FORMAT = 'DD/MM/YY';
+
+    static toSheet(val: any): string {
+        if (!val) return '';
+        // Si ya es un objeto Date o string ISO, lo convierte a DD/MM/YY
+        const d = dayjs(val);
+        return d.isValid() ? d.format(this.SHEET_FORMAT) : val;
+    }
+
+    static fromSheet(val: any): string {
+        if (!val) return '';
+        // Intenta parsear DD/MM/YY (ej: "05/07/26")
+        const d = dayjs(val, this.SHEET_FORMAT);
+        return d.isValid() ? d.format(this.INPUT_FORMAT) : val;
     }
 }

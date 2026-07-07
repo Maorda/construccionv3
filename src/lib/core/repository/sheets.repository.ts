@@ -30,6 +30,7 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
     private readonly populateEngine: PopulateEngine;
     private readonly cacheManager: Cache;
     private readonly aggregationFactory: AggregationFactory;
+    private documentModelConstructor?: any; // ✨ 1. Guardará la referencia al DocumentModel
 
     constructor(
         public readonly entityClass: ClassType<T>,
@@ -46,6 +47,15 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
         this.cacheManager = core.cacheManager;
         this.aggregationFactory = core.aggregationFactory;
         this.sheetName = this.metadata.getSchema(this.entityClass).sheetName;
+    }
+    // ✨ 2. Método para vincular el modelo enriquecido al repositorio
+    public bindModel(modelConstructor: any): void {
+        this.documentModelConstructor = modelConstructor;
+    }
+
+    // ✨ 3. Helper para obtener el constructor correcto (Prioridad: Custom > DocumentModel > Entity pura)
+    private getDocumentConstructor(options?: QueryOptions<T>): any {
+        return options?.customConstructor || this.documentModelConstructor || this.entityClass;
     }
 
     private getCacheKey(): string {
@@ -163,20 +173,36 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
             customConstructor: options.customConstructor as any
         });
 
+        // 1. LÓGICA DE UPSERT BLINDADA
         if (!found) {
             if (options.upsert) {
-                const createData = { ...filter, ...(update.$set || update) };
-                const newDoc = this.create(createData) as U;
+                // Pasamos el filtro inicial por el MutationEngine para procesar $set, $inc, etc. de forma segura
+                const initialData = this.mutationEngine.mutate(update, filter as Partial<T>);
+                const newDoc = this.create(initialData) as U;
                 return await newDoc.save();
             }
             return null;
         }
 
-        const mutatedData = this.mutationEngine.mutate(update, found.toObject());
+        // 2. PRESERVAR ESTADO ANTIGUO (Para cuando options.new === false)
+        // Clonamos el objeto puro antes de alterarlo en memoria
+        const originalPlainData = { ...found.toJSON() };
+
+        // 3. CORRECCIÓN CRÍTICA: Usar toJSON() en lugar de toObject()
+        const mutatedData = this.mutationEngine.mutate(update, found.toJSON());
         Object.assign(found, mutatedData);
 
-        const saved = await found.save();
-        return options.new !== false ? saved : found;
+        const savedDoc = await found.save();
+
+        // 4. RETORNO CORRECTO SEGÚN ESTILO MONGOOSE
+        if (options.new === false) {
+            // Rehidratamos un documento temporal con los datos viejos para retornar
+            const Constructor = this.getDocumentConstructor(options);
+            const oldDoc = new Constructor(originalPlainData, this, false) as U;
+            return oldDoc;
+        }
+
+        return savedDoc;
     }
 
     /**
@@ -319,9 +345,9 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
         };
 
         // Instanciamos el documento pasándole 'this' (el repositorio) para activar el patrón Active Record
-        const instance = new (this.entityClass as any)(payload, this, true) as U;
+        const Constructor = this.getDocumentConstructor();
+        const instance = new Constructor(payload, this, true) as U;
         EntityStore.set(instance as any, payload);
-
         return instance;
     }
 
@@ -349,7 +375,8 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
         const pkValue = cleanData[pkField as keyof typeof cleanData] as string | number;
 
         // 3. Instanciamos con el patrón Active Record de tu ODM
-        const doc = new (this.entityClass as any)(this, false) as Ret;
+        const Constructor = this.getDocumentConstructor(options);
+        const doc = new Constructor(cleanData, this, false) as Ret;
         Object.assign(doc, cleanData);
 
         // 4. Inicializamos relaciones como arreglos vacíos de forma preventiva

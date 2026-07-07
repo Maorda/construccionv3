@@ -6,6 +6,7 @@ import { ClassType } from '../types/common.types';
 import { MetadataRegistry } from '../metadata/metadata.registry';
 import { AggregationBuilder } from '../../stages/aggregation.builder';
 import { IdFactory } from '../../shared/id.generator';
+import { DateTransformer } from '../../stages/transform.operators';
 
 // ============================================================================
 // TIPOS Y OPCIONES (Tipado Estricto Mongoose-like)
@@ -187,6 +188,15 @@ export function createModel<T extends object>(
                 }
             }
 
+            for (const key of metadataKeys) {
+                let val = (this as any)[key];
+                // 🚀 TRANSFORMACIÓN DE LECTURA: Convertimos lo que viene de Sheets a formato sistema
+                if (details[key]?.type === 'date' && val) {
+                    val = DateTransformer.fromSheet(val);
+                }
+                plain[key] = val !== undefined ? val : null;
+            }
+
             // 🔵 VIRTUALS: Getters definidos en la entidad
             let virtualsCount = 0;
             for (const key of Object.keys(descriptors)) {
@@ -214,29 +224,22 @@ export function createModel<T extends object>(
 
         toSheetRow() {
             const plain: Record<string, any> = {};
-
-            // 💡 SOLUCIÓN: Mismo cambio crítico aquí para la persistencia física en Sheets
             const details = Reflect.getMetadata(SHEETS_COLUMN_DETAILS, entityClass) || {};
             const metadataKeys = Object.keys(details);
 
-            if (metadataKeys.length > 0) {
-                for (const key of metadataKeys) {
-                    const dbColumnName = MetadataRegistry.prototype.getDatabaseColumnName(entityClass, key);
-                    plain[dbColumnName] = (this as any)[key] !== undefined ? (this as any)[key] : null;
+            for (const key of metadataKeys) {
+                const dbColumnName = MetadataRegistry.prototype.getDatabaseColumnName(entityClass, key);
+                let val = (this as any)[key];
+
+                // 🚀 TRANSFORMACIÓN DE ESCRITURA: Convertimos el formato sistema a DD/MM/YY
+                if (details[key]?.type === 'date' && val) {
+                    val = DateTransformer.toSheet(val);
                 }
-            } else {
-                this.logger.warn(`⚠️ [FLOW-SERIALIZE] toSheetRow no encontró metadatos en [${entityClass.name}]. Mapeando llaves nativas.`);
-                for (const key of Object.keys(this)) {
-                    if (typeof (this as any)[key] !== 'function' && !key.startsWith('__')) {
-                        plain[key] = (this as any)[key];
-                    }
-                }
+
+                plain[dbColumnName] = val !== undefined ? val : null;
             }
 
-            if (this.rowNumber !== undefined) {
-                plain.__row = this.rowNumber;
-            }
-
+            if (this.rowNumber !== undefined) plain.__row = this.rowNumber;
             return plain;
         }
 
@@ -293,6 +296,9 @@ export function createModel<T extends object>(
     }
 
     Object.setPrototypeOf(DocumentModel.prototype, entityClass.prototype);
+
+    // ✨ CONEXIÓN CRÍTICA: Le decimos al repositorio que use este envoltorio al hidratar
+    repo.bindModel(DocumentModel);
 
     return DocumentModel as unknown as Model<T>;
 }

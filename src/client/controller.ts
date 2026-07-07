@@ -12,6 +12,58 @@ export class PlanillaTareoService {
         @InjectModel(AdelantoEntity)
         private readonly adelantoModel: Model<AdelantoEntity>
     ) { }
+    /**
+     * Ejemplo de findOneAndUpdate con operadores $inc y $set
+     * Aumenta el monto del adelanto y actualiza el motivo en una sola operación atómica.
+     */
+    async incrementarAdelanto(idAdelanto: string, montoAdicional: number, notaAdicional?: string) {
+        this.logger.log(`[ODM:UPDATE] Incrementando S/ ${montoAdicional} al adelanto ID: ${idAdelanto}`);
+
+        const updateQuery: any = {
+            $inc: { monto: montoAdicional }
+        };
+
+        if (notaAdicional) {
+            updateQuery.$set = { motivo: notaAdicional };
+        }
+
+        // Ejecutamos findOneAndUpdate pidiendo que devuelva el documento NUEVO modificado
+        const adelantoActualizado = await this.adelantoModel.findOneAndUpdate(
+            { id: idAdelanto },
+            updateQuery,
+            { new: true } // true = devuelve el dato ya sumado; false = devuelve como estaba antes
+        );
+
+        if (!adelantoActualizado) {
+            throw new NotFoundException(`No se encontró el adelanto con ID: ${idAdelanto}`);
+        }
+
+        return adelantoActualizado;
+    }
+
+    /**
+     * Ejemplo con UPSERT: Busca el adelanto de un obrero en una fecha específica.
+     * Si existe, le suma el monto. Si no existe, crea la fila de la nada con ese monto inicial.
+     */
+    async registrarOIncrementarAdelantoDiario(idPlanilla: string, idObrero: string, fecha: string, monto: number, motivo: string) {
+        this.logger.log(`[ODM:UPSERT] Evaluando adelanto diario para Obrero: ${idObrero} el dia ${fecha}`);
+
+        return await this.adelantoModel.findOneAndUpdate(
+            {
+                idPlanilla: idPlanilla,
+                idObrero: idObrero,
+                fecha: fecha
+            },
+            {
+                $inc: { monto: monto },
+                $set: { motivo: motivo }
+            },
+            {
+                upsert: true, // 🔥 Si no encuentra la fila, la crea con los datos del filtro + el update
+                new: true
+            }
+        );
+    }
 
     async getAdelantosReporte(obreroId: string, minMonto: number = 99) {
         // 1. Usamos la propiedad correcta 'idObrero' definida en la entidad
@@ -61,6 +113,37 @@ export class PlanillaAdminController {
         return await this.adelantoService.getAdelantosReporte(
             body.obreroId,
             body.minMonto ?? 0
+        );
+    }
+    @Post('adelanto/ajustar')
+    async incrementarAdelanto(
+        @Body() body: { idAdelanto: string; montoAdicional: number; nota?: string }
+    ) {
+        return await this.adelantoService.incrementarAdelanto(
+            body.idAdelanto,
+            body.montoAdicional,
+            body.nota
+        );
+    }
+
+    @Post('adelanto/upsert-diario')
+    async upsertAdelantoDiario(
+        @Body() body: { idPlanilla: string; idObrero: string; fecha: string; monto: number; motivo: string }
+    ) {
+        /*{
+    "idPlanilla": "PLANILLA-2026-07",
+    "idObrero": "4ON8A9AL",
+    "fecha": "2026-07-05", 
+    "monto": 370,
+    "motivo": "Adelanto para equipo de protección personal actualizado"
+}
+    */
+        return await this.adelantoService.registrarOIncrementarAdelantoDiario(
+            body.idPlanilla,
+            body.idObrero,
+            body.fecha,
+            body.monto,
+            body.motivo
         );
     }
 

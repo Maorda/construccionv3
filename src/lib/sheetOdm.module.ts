@@ -24,7 +24,7 @@ import { ExpressionEngine } from './stages/expression.engine';
 
 // Operadores
 import {
-  AggregateOperator, ConcatOperator, DateAddOperator, IfOperator,
+  AggregateOperator, ConcatOperator, DateAddOperator, DateTransformer, IfOperator,
   IncOperator, MathOperator, MinMaxOperator, MultiplyOperator,
   RoundOperator, TimeDiffOperator, TrimOperator, UpperOperator
 } from './stages/transform.operators';
@@ -92,11 +92,12 @@ const TRANSFORM_OPERATORS = [
   TrimOperator, DateAddOperator, TimeDiffOperator, AggregateOperator
 ];
 
-const FILTER_OPERATORS = [EqOperator, GtOperator, InOperator, NinOperator, NeOperator, GteOperator, LtOperator, LteOperator, RegexOperator, ExistsOperator];
+const FILTER_OPERATORS = [EqOperator, GtOperator, InOperator, NinOperator, NeOperator, GteOperator, LtOperator, LteOperator, RegexOperator, ExistsOperator, DateTransformer];
 
 const PIPELINE_STAGES = [
   MatchStage, SortStage, LimitStage, SkipStage, ProjectStage, AddFieldsStage
 ];
+
 
 // Listado maestro de todos los servicios internos del motor
 const ALL_COMMON_PROVIDERS: Provider[] = [
