@@ -1,7 +1,7 @@
 // sheet-data.gateway.ts
 import { Injectable, Logger, Inject } from '@nestjs/common';
 import { GoogleSheetProvider } from '../../adapters/google-sheet.provider';
-import { MetadataRegistry } from '../../core/metadata/metadata.registry';
+import { MetadataRegistry } from '../../JoinSheetTabs/metadata.registry';
 import { ClassType } from '../../core/types/common.types';
 import { SHEET_ODM_OPTIONS } from '../../shared/constants/constants';
 import { SheetOdmModuleOptions } from '../../interfaces/sheet-odm-options.interface';

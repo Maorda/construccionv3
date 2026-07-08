@@ -1,6 +1,6 @@
 // src/lib/engine/populate.engine.ts
 import { Injectable, Logger } from '@nestjs/common';
-import { MetadataRegistry } from '../metadata/metadata.registry';
+import { MetadataRegistry } from '../../JoinSheetTabs/metadata.registry';
 import { ClassType } from '../types/common.types';
 import { buildPopulateTree, PopulateTree } from './populate.utils';
 import { ModelRegistry } from '../model/model.registry';

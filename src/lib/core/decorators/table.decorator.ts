@@ -1,6 +1,6 @@
 import 'reflect-metadata';
 import { ClassType, TableOptions } from '../metadata/interfaces';
-import { MetadataRegistry } from '../metadata/metadata.registry';
+import { MetadataRegistry } from '../../JoinSheetTabs/metadata.registry';
 import { SHEETS_DTO, SHEETS_TABLE_NAME, SHEETS_SPREADSHEET_ID } from '../../shared/constants/constants';
 
 // --- DECORADOR @Table ---

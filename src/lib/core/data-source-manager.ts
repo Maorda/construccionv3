@@ -17,7 +17,7 @@ import { SheetDataGateway } from '../infrastructure/sheet-api/sheet-data.gateway
 
 // Servicios Core
 import { OutboxEntry, OutboxService, OutboxStatus, TypeOp } from '../core/outbox/interfaces/outbox-entry.interface';
-import { MetadataRegistry } from '../core/metadata/metadata.registry';
+import { MetadataRegistry } from '../JoinSheetTabs/metadata.registry';
 import { ClassType } from '../core/types/common.types';
 import { IdFactory } from '@sheetOdm/shared/id.generator';
 

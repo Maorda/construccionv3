@@ -13,4 +13,4 @@ export * from './core/types/common.types';
 export * from './core/metadata/interfaces/index';
 
 // 5. Servicios (Opcional, pero recomendado si necesitan acceder al MetadataRegistry)
-export { MetadataRegistry } from './core/metadata/metadata.registry';
+export { MetadataRegistry } from './JoinSheetTabs/metadata.registry';

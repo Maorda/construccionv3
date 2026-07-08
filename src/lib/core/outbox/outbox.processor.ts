@@ -3,7 +3,7 @@ import { Inject, Injectable, Logger, OnApplicationBootstrap, OnApplicationShutdo
 import { ModuleRef } from '@nestjs/core';
 import { OutboxStatus, OutboxEntry } from './interfaces/outbox-entry.interface';
 import { IPostgresProvider } from '../../interfaces/provider.interface';
-import { MetadataRegistry } from '../metadata/metadata.registry';
+import { MetadataRegistry } from '../../JoinSheetTabs/metadata.registry';
 import { SheetOdmModuleOptions } from '../../interfaces/sheet-odm-options.interface';
 import { getRepositoryToken } from '../../utils/getRepositoryToken';
 import { POSTGRES_TOKEN, SHEET_ODM_OPTIONS } from '../../shared/constants/constants';

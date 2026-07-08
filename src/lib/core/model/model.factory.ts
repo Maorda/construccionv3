@@ -3,7 +3,7 @@ import { SheetDocument } from '../wrapper/sheet-document';
 import { SheetsRepository } from '../repository/sheets.repository';
 import { ROW_INDEX_SYMBOL, SHEETS_COLUMN_DETAILS, SHEETS_PRIMARY_KEY, SHEETS_RELATIONS_LIST } from '../../shared/constants/constants';
 import { ClassType } from '../types/common.types';
-import { MetadataRegistry } from '../metadata/metadata.registry';
+import { MetadataRegistry } from '../../JoinSheetTabs/metadata.registry';
 import { AggregationBuilder } from '../../stages/aggregation.builder';
 import { IdFactory } from '../../shared/id.generator';
 import { DateTransformer } from '../../stages/transform.operators';
@@ -30,21 +30,25 @@ export interface FindOneAndUpdateOptions<T extends object, U = any> extends Quer
 
 export const InjectModel = (entity: Function) => Inject(`${entity.name}Model`);
 
-export interface PopulateOptions {
-    path: string;
-    // Futuras mejoras: select?: string[], match?: any, limit?: number
+export interface PopulateOptions<T = any> {
+    path: string; // El nombre de la propiedad o relación (ej: 'adelantos')
+    select?: string | string[] | Record<string, number | boolean>; // Proyección del hijo (ej: { monto: 1 } o 'monto fecha')
+    match?: Record<string, any>; // Filtros para aplicar solo a la tabla hija
+    limit?: number;
+    sort?: { field: string; order: 'ASC' | 'DESC' };
+    populate?: string | PopulateOptions | (string | PopulateOptions)[]; // Soporte para Populate anidado (A -> B -> C)
 }
 
 export interface QueryOptions<T = any> {
     populate?: string | string[] | PopulateOptions | PopulateOptions[];
-    projection?: Projection<T>;
+    projection?: Record<keyof T | string, number | boolean>; // Más preciso para tu motor
     limit?: number;
     offset?: number;
     sort?: { field: string; order: 'ASC' | 'DESC' };
     includeInactive?: boolean;
     skip?: number;
     forceRefresh?: boolean;
-    customConstructor?: ConstructorSignature<T, any>;
+    customConstructor?: any; // o tu ConstructorSignature<T, any>
     lean?: boolean;
 }
 

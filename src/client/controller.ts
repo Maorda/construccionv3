@@ -12,6 +12,34 @@ export class PlanillaTareoService {
         @InjectModel(AdelantoEntity)
         private readonly adelantoModel: Model<AdelantoEntity>
     ) { }
+    async registrarOIncrementarAdelantoDiarioPro(
+        idPlanilla: string,
+        idObrero: string,
+        fecha: string,
+        monto: number,
+        motivo: string
+    ) {
+        this.logger.log(`[TEST:UPSERT] Ejecutando findOneAndUpdate con hidratación relacional para Obrero: ${idObrero}`);
+
+        return await this.adelantoModel.findOneAndUpdate(
+            {
+                idPlanilla: idPlanilla,
+                idObrero: idObrero,
+                fecha: fecha
+            },
+            {
+                $inc: { monto: monto },
+                $set: { motivo: motivo }
+            },
+            {
+                upsert: true,
+                new: true, // Devuelve el dato modificado
+                // 🔥 AQUÍ PROBAMOS EL MÓDULO NUEVO:
+                // Queremos que el repositorio aplique resolveJoins sobre el resultado del update
+                populate: 'idObrero' // Suponiendo que adelantos tiene una relación inversa o mapeas al padre
+            } as any // Forzamos any si tu interfaz estricta de UpdateOptions no hereda de QueryOptions aún
+        );
+    }
     /**
      * Ejemplo de findOneAndUpdate con operadores $inc y $set
      * Aumenta el monto del adelanto y actualiza el motivo en una sola operación atómica.
@@ -139,6 +167,18 @@ export class PlanillaAdminController {
 }
     */
         return await this.adelantoService.registrarOIncrementarAdelantoDiario(
+            body.idPlanilla,
+            body.idObrero,
+            body.fecha,
+            body.monto,
+            body.motivo
+        );
+    }
+    @Post('test-upsert-relacional')
+    async testUpsertRelacional(
+        @Body() body: { idPlanilla: string; idObrero: string; fecha: string; monto: number; motivo: string }
+    ) {
+        return await this.adelantoService.registrarOIncrementarAdelantoDiarioPro(
             body.idPlanilla,
             body.idObrero,
             body.fecha,

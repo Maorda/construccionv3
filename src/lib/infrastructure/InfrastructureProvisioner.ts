@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { SheetDataGateway } from './sheet-api/sheet-data.gateway';
-import { MetadataRegistry } from '../core/metadata/metadata.registry';
+import { MetadataRegistry } from '../JoinSheetTabs/metadata.registry';
 import { SHEETS_DTO, SHEETS_TABLE_NAME } from '../shared/constants/constants';
 import { ClassType } from '../core/types/common.types';
 

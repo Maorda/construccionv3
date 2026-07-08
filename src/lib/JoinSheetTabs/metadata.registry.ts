@@ -10,10 +10,10 @@ import {
     SHEETS_VERSION_FIELD,
     SHEETS_VIRTUALS,
     ROW_INDEX_SYMBOL
-} from '../../shared/constants/constants';
-import { ColumnOptions, ReferenceOptions, SubCollectionOptions } from '../../core/metadata/interfaces';
-import { ClassType } from '../../core/types/common.types';
-import { EntityStore } from '../store/entity-store';
+} from '../shared/constants/constants';
+import { ColumnOptions, ReferenceOptions, SubCollectionOptions } from '../core/metadata/interfaces';
+import { ClassType } from '../core/types/common.types';
+import { EntityStore } from '../core/store/entity-store';
 
 export type CompiledRelation =
     | {
@@ -50,6 +50,13 @@ export interface EntitySchema {
     virtuals: any[];
 }
 
+export interface CleanJoinConfig {
+    targetEntity: ClassType<any>;
+    foreignKey: string;
+    localField: string;
+    isMany: boolean;
+}
+
 // 🔥 OPTIMIZACIÓN CRÍTICA: Símbolo global inmutable para prevenir el "Asesino Silencioso" 
 // de múltiples instancias de la clase en librerías empaquetadas.
 const ODM_GLOBAL_REGISTRY_KEY = Symbol.for('sheetOdm.global_metadata_store');
@@ -79,6 +86,39 @@ export class MetadataRegistry {
     static getAllRegisteredEntities(): ClassType<any>[] {
         const store = globalThis[ODM_GLOBAL_REGISTRY_KEY] as Set<ClassType<any>>;
         return Array.from(store);
+    }
+    getJoinConfig<T extends object>(entityClass: ClassType<T>, propertyName: string): CleanJoinConfig | undefined {
+        const schema = this.getSchema(entityClass);
+        const rel = schema.relations[propertyName];
+
+        if (!rel) return undefined;
+
+        const targetEntity = rel.targetEntity();
+
+        // 1. Local Field: Si no se define, usa la Primary Key del padre (ej: 'id')
+        const localField = (rel as any).localField || schema.primaryKey;
+
+        // 2. 🚀 SOLUCIÓN AL TYPE ERROR: Fallback inteligente garantizando un string
+        let foreignKey = rel.joinColumn;
+
+        if (!foreignKey) {
+            if (rel.type === 'reference') {
+                // Ej: propiedad 'categoria' -> infiere 'idCategoria'
+                const capitalizedProp = propertyName.charAt(0).toUpperCase() + propertyName.slice(1);
+                foreignKey = `id${capitalizedProp}`;
+            } else {
+                // Ej: clase 'ObreroEntity' -> infiere 'idObrero'
+                const baseName = entityClass.name.replace('Entity', '').replace('Model', '');
+                foreignKey = `id${baseName}`;
+            }
+        }
+
+        return {
+            targetEntity,
+            foreignKey,     // 👈 TypeScript ahora sabe que esto SIEMPRE es string
+            localField,
+            isMany: rel.isMany
+        };
     }
 
 

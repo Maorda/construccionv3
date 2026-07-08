@@ -9,7 +9,7 @@ import { PIPELINE_STAGE, DATA_TRANSFORM_OPERATOR, FILTER_OPERATOR } from './stag
 
 // Núcleo del Sistema (Core)
 import { DataSourceManager } from './core/data-source-manager';
-import { MetadataRegistry } from './core/metadata/metadata.registry';
+import { MetadataRegistry } from './JoinSheetTabs/metadata.registry';
 import { GasTelemetryInterceptor } from './core/interceptors/gas-telemetry.interceptor';
 import { SheetDocumentHydrator } from './core/base/sheet-document-hydrator';
 import { SheetDataTransformer } from './core/base/sheetDataTransformer';
@@ -54,13 +54,14 @@ import { ModelRegistry } from './core/model/model.registry';
 import { PipelineOrchestrator } from './stages/pipeline.registry';
 import { AggregationBuilder } from './stages/aggregation.builder';
 import { AggregationFactory } from './stages/interfaces/aggregation.factory';
+import { JoinSheetTabsModule } from './JoinSheetTabs/JoinSheetTabsModule';
 
 // ============================================================================
-// AGRUPACIONES DE PROVIDERS (Mantenidas para legibilidad)
+// AGRUPACIONES DE PROVIDERS
 // ============================================================================
 
 const CORE_SHARED_SERVICES: Provider[] = [
-  RepositoryCoreFacade,
+  RepositoryCoreFacade, // 👈 Al estar aquí, NestJS le inyectará automáticamente el JoinSheetTabsService porque el módulo está importado en la raíz
   DataSourceManager,
   MetadataRegistry,
   OdmDiagnosticsService,
@@ -71,9 +72,9 @@ const CORE_SHARED_SERVICES: Provider[] = [
   SheetDocumentHydrator,
   SheetDataGateway,
   InfrastructureProvisioner,
-  PipelineOrchestrator, // Dependencia de AggregationBuilder
-  AggregationBuilder,   // El que causaba el error
-  AggregationFactory,   // La factoría para el estilo Mongoose
+  PipelineOrchestrator,
+  AggregationBuilder,
+  AggregationFactory,
 ];
 
 const INTERNAL_SERVICES: Provider[] = [
@@ -98,8 +99,6 @@ const PIPELINE_STAGES = [
   MatchStage, SortStage, LimitStage, SkipStage, ProjectStage, AddFieldsStage
 ];
 
-
-// Listado maestro de todos los servicios internos del motor
 const ALL_COMMON_PROVIDERS: Provider[] = [
   ...INTERNAL_SERVICES,
   ...CORE_SHARED_SERVICES,
@@ -130,7 +129,6 @@ const ALL_COMMON_PROVIDERS: Provider[] = [
 @Global()
 @Module({
   imports: [HttpModule],
-  // Dejamos el decorador base al mínimo para evitar inicializaciones prematuras sin contexto
 })
 export class SheetOdmModule implements OnApplicationBootstrap {
   private readonly logger = new Logger('SheetOdm');
@@ -167,8 +165,9 @@ export class SheetOdmModule implements OnApplicationBootstrap {
       global: true,
       module: SheetOdmModule,
       imports: [
-        SheetCacheModule, // 🚀 Única fuente de verdad para la caché global
+        SheetCacheModule,
         UowModule,
+        JoinSheetTabsModule, // 🚀 Cargamos el módulo para que exponga el Orquestador
         ...(options.imports || []),
         OutboxModule.registerAsync({
           useFactory: options.useFactory,
@@ -188,7 +187,7 @@ export class SheetOdmModule implements OnApplicationBootstrap {
         },
         { provide: POSTGRES_TOKEN, useExisting: PostgresProvider },
 
-        ...ALL_COMMON_PROVIDERS, // 📦 Inyecta todos los motores y pasarelas de golpe
+        ...ALL_COMMON_PROVIDERS,
       ],
       exports: [
         UowModule,
@@ -196,13 +195,14 @@ export class SheetOdmModule implements OnApplicationBootstrap {
         PostgresProvider,
         POSTGRES_TOKEN,
         SheetCacheModule,
+        JoinSheetTabsModule, // 🚀 Exportación Global
         ...CORE_SHARED_SERVICES,
       ],
     };
   }
 
   // ========================================================================
-  // CONFIGURACIÓN SÍNCRONA (Root Sync) -> ¡Ahora sí es simétrico!
+  // CONFIGURACIÓN SÍNCRONA (Root Sync)
   // ========================================================================
 
   static forRoot(options: SheetOdmModuleOptions): DynamicModule {
@@ -212,6 +212,7 @@ export class SheetOdmModule implements OnApplicationBootstrap {
       imports: [
         SheetCacheModule,
         UowModule,
+        JoinSheetTabsModule, // 🚀 Cargamos el módulo de Joins
       ],
       controllers: [OdmDiagnosticsController],
       providers: [
@@ -225,13 +226,14 @@ export class SheetOdmModule implements OnApplicationBootstrap {
         },
         { provide: POSTGRES_TOKEN, useExisting: PostgresProvider },
 
-        ...ALL_COMMON_PROVIDERS, // 📦 Los mismos servicios que la versión Async
+        ...ALL_COMMON_PROVIDERS,
       ],
       exports: [
         UowModule,
         PostgresProvider,
         POSTGRES_TOKEN,
         SheetCacheModule,
+        JoinSheetTabsModule, // 🚀 Exportación Global
         ...CORE_SHARED_SERVICES,
       ],
     };
@@ -245,10 +247,9 @@ export class SheetOdmModule implements OnApplicationBootstrap {
     const providers: Provider[] = entities.flatMap((entity) => {
       MetadataRegistry.register(entity as any);
 
-
-
       const repositoryToken = `SheetsRepository_${entity.name}`;
 
+      // 🔄 RETORNO A LO LIMPIO: El repositorio vuelve a recibir únicamente su coreFacade tradicional
       const repositoryProvider: Provider = {
         provide: repositoryToken,
         useFactory: (coreFacade: RepositoryCoreFacade) =>
@@ -260,7 +261,6 @@ export class SheetOdmModule implements OnApplicationBootstrap {
         provide: `${entity.name}Model`,
         useFactory: (repo: SheetsRepository<any>) => {
           const model = createModel(entity as any, repo);
-          // 🔥 Registro automático
           ModelRegistry.register(entity.name, model);
           return model;
         },

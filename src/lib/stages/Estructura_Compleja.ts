@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, Logger } from "@nestjs/common";
 import { ModuleRef } from "@nestjs/core";
 import { IQueryStage } from "./interfaces/query-stage.interface";
 import { ExpressionEngine } from "./expression.engine";
-import { MetadataRegistry } from "../core/metadata/metadata.registry";
+import { MetadataRegistry } from "../JoinSheetTabs/metadata.registry";
 
 // ==========================================
 // 1. GROUP STAGE ($group)

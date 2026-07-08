@@ -1,5 +1,5 @@
 import { Logger } from '@nestjs/common';
-import { MetadataRegistry } from '../metadata/metadata.registry';
+import { MetadataRegistry } from '../../JoinSheetTabs/metadata.registry';
 import { DataSourceManager } from '../data-source-manager';
 import { UnitOfWork } from '../uow/services/unit-of-work.service';
 import { ClassType } from '../types/common.types';
@@ -17,8 +17,9 @@ import { IdFactory } from '@sheetOdm/shared/id.generator';
 import { EntityStore } from '../store/entity-store';
 import { AggregationBuilder } from '../../stages/aggregation.builder';
 import { AggregationFactory } from '../../stages/interfaces/aggregation.factory';
-
+import { JoinSheetTabsService } from '@sheetOdm/JoinSheetTabs/JoinSheetTabsService';
 export const entityDataMap = new WeakMap<any, any>();
+
 export class SheetsRepository<T extends object, U extends SheetDocument<T> = SheetDocument<T>> {
     private readonly logger: Logger;
     private readonly sheetName: string;
@@ -30,12 +31,15 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
     private readonly populateEngine: PopulateEngine;
     private readonly cacheManager: Cache;
     private readonly aggregationFactory: AggregationFactory;
+
+    // 🚀 NUEVO: Propiedad privada para el motor de Joins de pestañas
+    private readonly joinSheetTabsService: JoinSheetTabsService;
+
     private documentModelConstructor?: any; // ✨ 1. Guardará la referencia al DocumentModel
 
     constructor(
         public readonly entityClass: ClassType<T>,
         core: RepositoryCoreFacade, // 🚀 Solo inyectamos el Facade
-
     ) {
         this.logger = new Logger(`Repository<${this.entityClass.name}>`);
         this.metadata = core.metadata;
@@ -46,8 +50,13 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
         this.populateEngine = core.populateEngine;
         this.cacheManager = core.cacheManager;
         this.aggregationFactory = core.aggregationFactory;
+
+        // 🚀 NUEVO: Extracción limpia desde la Fachada central sin alterar la firma del constructor
+        this.joinSheetTabsService = core.joinSheetTabsService;
+
         this.sheetName = this.metadata.getSchema(this.entityClass).sheetName;
     }
+
     // ✨ 2. Método para vincular el modelo enriquecido al repositorio
     public bindModel(modelConstructor: any): void {
         this.documentModelConstructor = modelConstructor;
@@ -83,8 +92,9 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
 
                 if (rawData) {
                     const instance = this.hydrateAndCacheRawResult<U>(rawData, options);
-                    // Aplicar población automática en el camino indexado
-                    await this.applyPopulation([instance], options);
+
+                    // 🔄 Modificado: Centralizado en applyRelations para resolver tanto Populate como el nuevo Join
+                    await this.applyRelations([instance], options);
                     return instance;
                 }
             } catch (error: any) {
@@ -93,7 +103,6 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
         }
 
         // 2. Fallback: Usar el método find (Camino lento pero seguro)
-        // Como find() ahora es autónomo, llamarlo aquí resuelve automáticamente la población
         const results = await this.find(filter, { ...options, limit: 1 });
         return results.length > 0 ? (results[0] as U) : null;
     }
@@ -122,11 +131,8 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
                 );
 
                 if (rawArray && rawArray.length > 0) {
-                    this.logger.debug(`[FIND] Sheets retornó ${rawArray.length} filas crudas (Indexadas). Muestra de cabeceras: ${Object.keys(rawArray[0])}`);
-                    // 🔄 Aquí ocurre la magia: rawArray (SNAKE) -> mapeado e instanciado (camelCase)
+                    this.logger.debug(`[FIND] Sheets retornó ${rawArray.length} filas crudas (Indexadas).`);
                     const mappedInstances = rawArray.map(raw => this.hydrateAndCacheRawResult<U>(raw, options));
-
-                    // El QueryEngine ahora puede filtrar con { idObrero: ... } porque procesa instancias limpias
                     instances = await this.queryEngine.execute(mappedInstances, safeFilter, options);
                 }
             } catch (error: any) {
@@ -138,27 +144,23 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
         if (instances.length === 0) {
             const rawItems = await this.fetchRawData(options?.includeInactive);
             if (rawItems.length > 0) {
-                this.logger.debug(`[FIND] Sheets retornó ${rawItems.length} filas crudas (Escaneo). Muestra de cabeceras: ${Object.keys(rawItems[0])}`);
+                this.logger.debug(`[FIND] Sheets retornó ${rawItems.length} filas crudas (Escaneo).`);
             }
 
-            // 🔄 Lo mismo para el escaneo total
             const mappedInstances = rawItems.map(raw => this.hydrateAndCacheRawResult<U>(raw, options));
-
             instances = await this.queryEngine.execute(mappedInstances, safeFilter, options);
         }
 
-        // 2. Auto-Populación
-        // 'instances' va cargado con objetos TypeScript puros que el PopulateEngine entiende perfectamente.
-        await this.applyPopulation(instances, options);
+        // 2. 🚀 Orquestación y carga de relaciones (Populate tradicional + Nuevos Joins modulares)
+        await this.applyRelations(instances, options);
 
-        if (instances.length > 0 && this.sheetName === 'obreros') { // Ejemplo con obreros
+        if (instances.length > 0 && this.sheetName === 'obreros') {
             const muestra = instances[0] as any;
-            this.logger.debug(`[POPULATE] Primer obrero resultado: ID=${muestra.id}, Adelantos Cargados=${muestra.adelantos?.length || 0}`);
+            this.logger.debug(`[RELATIONS] Primer obrero procesado: ID=${muestra.id}`);
         }
 
         return instances;
     }
-
 
     /**
      * 🔄 BUSCAR Y ACTUALIZAR
@@ -173,10 +175,8 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
             customConstructor: options.customConstructor as any
         });
 
-        // 1. LÓGICA DE UPSERT BLINDADA
         if (!found) {
             if (options.upsert) {
-                // Pasamos el filtro inicial por el MutationEngine para procesar $set, $inc, etc. de forma segura
                 const initialData = this.mutationEngine.mutate(update, filter as Partial<T>);
                 const newDoc = this.create(initialData) as U;
                 return await newDoc.save();
@@ -184,19 +184,13 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
             return null;
         }
 
-        // 2. PRESERVAR ESTADO ANTIGUO (Para cuando options.new === false)
-        // Clonamos el objeto puro antes de alterarlo en memoria
         const originalPlainData = { ...found.toJSON() };
-
-        // 3. CORRECCIÓN CRÍTICA: Usar toJSON() en lugar de toObject()
         const mutatedData = this.mutationEngine.mutate(update, found.toJSON());
         Object.assign(found, mutatedData);
 
         const savedDoc = await found.save();
 
-        // 4. RETORNO CORRECTO SEGÚN ESTILO MONGOOSE
         if (options.new === false) {
-            // Rehidratamos un documento temporal con los datos viejos para retornar
             const Constructor = this.getDocumentConstructor(options);
             const oldDoc = new Constructor(originalPlainData, this, false) as U;
             return oldDoc;
@@ -210,7 +204,6 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
      */
     async aggregate<R = any>(pipeline: any[]): Promise<R[]> {
         try {
-            // Ahora consume el método refactorizado limpio
             const rawItems = await this.fetchRawData(false);
             return await this.queryEngine.aggregate(rawItems, pipeline) as R[];
         } catch (error: any) {
@@ -219,13 +212,26 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
         }
     }
 
-    private async applyPopulation(instances: U[], options?: QueryOptions<T>): Promise<void> {
-        if (options?.populate && instances.length > 0) {
+    /**
+     * 🚀 NUEVO / REFACORIZADO: Centralizador de resoluciones relacionales de lectura
+     */
+    private async applyRelations(instances: U[], options?: QueryOptions<T>): Promise<void> {
+        if (!instances || instances.length === 0) return;
+
+        // Flujo A: Populate nativo por Engine clásico
+        // 🛡️ CORRECCIÓN: Dejamos this.entityClass intacto. Tu motor ya espera ClassType<T> aquí.
+        if (options?.populate) {
             await this.populateEngine.populate<T, U>(
                 instances,
                 this.entityClass,
                 options.populate as any
             );
+        }
+
+        // Flujo B: 🚀 Nuevo procesamiento modular del JoinSheetTabsModule
+        // Funciona sin casteos gracias a la nueva firma resolveJoins<T, U> del servicio
+        if (this.joinSheetTabsService && typeof this.joinSheetTabsService.resolveJoins === 'function') {
+            await this.joinSheetTabsService.resolveJoins(instances, this.entityClass, options);
         }
     }
 
@@ -233,7 +239,6 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
      * 📝 GUARDAR (UoW o Directo)
      */
     async save(doc: SheetDocument<T>): Promise<SheetDocument<T>> {
-        // Guardrail defensivo de prototipos antes de extraer propiedades
         if (!doc || typeof doc.getPrimaryKeyValue !== 'function') {
             throw new Error(`[OdmError] Estructura inválida. El objeto no hereda de SheetDocument.`);
         }
@@ -253,7 +258,7 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
         const childMutations: { entityClass: ClassType<any>; payload: any; operation: TypeOp }[] = [];
         const relations = this.metadata.getCompiledRelations(this.entityClass);
 
-        // 🔀 DISEÑO TAB-TO-TAB: Procesamiento estricto de subcolecciones como pestañas independientes
+        // 🔀 DISEÑO TAB-TO-TAB: Procesamiento estricto de subcolecciones
         for (const rel of relations) {
             if (rel.type === 'subcollection' && payload[rel.propertyName]) {
                 const childrenArray = payload[rel.propertyName];
@@ -263,7 +268,7 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
                     const joinColName = rel.joinColumn || `${this.entityClass.name.toLowerCase()}Id`;
 
                     for (const child of childrenArray) {
-                        child[joinColName] = pk; // Inyectar id del padre en la fila de la pestaña hija
+                        child[joinColName] = pk;
                         childMutations.push({
                             entityClass: TargetEntityClass,
                             payload: child,
@@ -271,7 +276,6 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
                         });
                     }
                 }
-                // 🧹 Sanitización: Borramos el array para que no intente guardarse en una celda de la pestaña padre
                 delete payload[rel.propertyName];
             }
         }
@@ -302,7 +306,7 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
             return doc;
         }
 
-        // ⚡ FLUJO B: DESPACHO DIRECTO AL DSM (Postgres Outbox / Concurrente)
+        // ⚡ FLUJO B: DESPACHO DIRECTO AL DSM
         await this.dataSource.dispatchMutation(this.entityClass, operation, payload, payload);
 
         for (const childMut of childMutations) {
@@ -313,10 +317,15 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
     }
 
     /**
-     * 🗑️ ELIMINAR
+     * 🗑️ ELIMINAR (Con soporte opcional para Cascading Deletes del nuevo módulo)
      */
     async delete(doc: U): Promise<boolean> {
         const pk = doc.getPrimaryKeyValue(this.getPrimaryKeyField() as keyof T);
+
+        // 🚀 NUEVO HOOK RELACIONAL: Ahora pasa limpiamente gracias al desacoplamiento en el servicio
+        if (this.joinSheetTabsService && typeof this.joinSheetTabsService.handleCascadeDelete === 'function') {
+            await this.joinSheetTabsService.handleCascadeDelete(doc, this.entityClass);
+        }
 
         if (this.uow.hasActiveTransaction()) {
             this.uow.queueOperation({
@@ -344,7 +353,6 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
             id: generatedId
         };
 
-        // Instanciamos el documento pasándole 'this' (el repositorio) para activar el patrón Active Record
         const Constructor = this.getDocumentConstructor();
         const instance = new Constructor(payload, this, true) as U;
         EntityStore.set(instance as any, payload);
@@ -358,28 +366,21 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
     private hydrateAndCacheRawResult<Ret extends U = U>(rawObject: any, options?: QueryOptions<T>): Ret {
         if (!rawObject) return null as any;
 
-        // 1. Evitamos mutar el objeto original creando una copia superficial segura
         const targetRaw = { ...rawObject };
 
         if (targetRaw._row !== undefined && targetRaw._row !== null) {
             targetRaw[ROW_INDEX_SYMBOL] = targetRaw._row;
-            delete targetRaw._row; // Ahora es seguro eliminarlo porque es nuestra copia
+            delete targetRaw._row;
         }
 
-        // 2. Mapeamos los datos de SNAKE_CASE a camelCase usando tu infraestructura
         const cleanData = this.metadata.mapRawToEntity(targetRaw, this.entityClass);
-        if (this.sheetName === 'adelantos') { // O la pestaña que estés debugueando
-            this.logger.verbose(`[HYDRATE] Datos convertidos a CamelCase: ${JSON.stringify(cleanData)}`);
-        }
         const pkField = this.getPrimaryKeyField();
         const pkValue = cleanData[pkField as keyof typeof cleanData] as string | number;
 
-        // 3. Instanciamos con el patrón Active Record de tu ODM
         const Constructor = this.getDocumentConstructor(options);
         const doc = new Constructor(cleanData, this, false) as Ret;
         Object.assign(doc, cleanData);
 
-        // 4. Inicializamos relaciones como arreglos vacíos de forma preventiva
         const relations = this.metadata.getCompiledRelations(this.entityClass);
         for (const rel of relations) {
             if (rel.isMany) {
@@ -387,15 +388,12 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
             }
         }
 
-        // 5. Registro seguro en la Unidad de Trabajo (Unit of Work)
         if (pkValue) {
             this.uow.register(doc, pkValue, this.entityClass);
         }
 
         return doc;
     }
-
-
 
     async clearRepositoryCache(): Promise<void> {
         await this.cacheManager.del(this.getCacheKey());
@@ -405,24 +403,19 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
     protected async fetchRawData(includeInactive = false): Promise<any[]> {
         const cacheKey = this.getCacheKey();
 
-        // 1. Intentar obtener de caché
         const cachedData = await this.cacheManager.get<any[]>(cacheKey);
         if (cachedData) {
             this.logger.debug(`[Cache Hit] Datos obtenidos de memoria para: ${this.sheetName}`);
             return cachedData;
         }
 
-        // 2. Fallback al DataSourceManager (La lógica de rangos y letras ya no vive aquí)
         this.logger.debug(`[Cache Miss] Solicitando filas crudas al DSM para: ${this.sheetName}`);
-
         let items = await this.dataSource.readFindAll<any>(this.sheetName);
 
-        // Protección por si el DSM devuelve nulo
         if (!items) {
             items = [];
         }
 
-        // 3. Aplicar Soft-Delete (Lógica de Negocio)
         const schema = this.metadata.getSchema(this.entityClass);
         const deleteControlProp = schema.deleteControl;
 
@@ -430,9 +423,7 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
             items = items.filter(item => !item[deleteControlProp]);
         }
 
-        // 4. Guardar en caché delegando el TTL al módulo global
         await this.cacheManager.set(cacheKey, items);
-
         return items;
     }
 
@@ -451,9 +442,7 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
             if (updates.length > 0) await this.processUpdates(updates);
             if (inserts.length > 0) await this.processInserts(inserts);
 
-            // ✅ INVALIDACIÓN CRÍTICA: La base de datos cambió, la caché debe morir.
             await this.cacheManager.del(this.getCacheKey());
-
             this.logger.debug(`[commitBulk] Lote procesado e invalidada caché para: ${this.sheetName}`);
         } catch (error: any) {
             this.logger.error(`[commitBulk] Error: ${error.message}`);
@@ -472,7 +461,6 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
         return this.metadata.getPrimaryKeyField(this.entityClass);
     }
 
-
     private async processInserts(docs: SheetDocument<T>[]): Promise<void> {
         if (!docs || docs.length === 0) return;
 
@@ -482,14 +470,10 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
 
             await this.dataSource.dispatchMutation(
                 this.entityClass,
-                'INSERT' as TypeOp, // Ajusta a tu enum: ej. TypeOp.INSERT
+                'INSERT' as TypeOp,
                 payload,
-                rawRowValues        // El array plano listo para que el trigger haga .appendRow()
+                rawRowValues
             );
-
-            // 💡 CONVENCIÓN WAL (Write-Ahead Log): 
-            // Como la escritura física es asíncrona, le asignamos un rowIndex temporal de -1 
-            // indicando: "Guardado en Outbox, pendiente de sincronización física".
             doc.markAsSaved(-1);
         }));
     }
@@ -498,7 +482,6 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
         if (!docs || docs.length === 0) return;
 
         await Promise.all(docs.map(async (doc: SheetDocument<T>) => {
-            // 1. Optimistic Locking
             if (doc.version !== undefined && typeof doc.setVersion === 'function') {
                 doc.setVersion(doc.version + 1);
             }
@@ -507,9 +490,6 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
             const rawRowValues = this.metadata.serialize(doc as unknown as T, this.entityClass);
             const rowIndex = (doc as any)[ROW_INDEX_SYMBOL];
 
-            // 🎁 REGALO PARA EL CONSUMIDOR DEL OUTBOX:
-            // Le pasamos el rowIndex físicamente en el rawDoc para que Apps Script 
-            // no tenga que hacer un .find() buscando el ID por toda la hoja.
             const outboxRawDoc = {
                 rowIndex,
                 values: rawRowValues
@@ -533,7 +513,6 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
             const rowIndex = (doc as any)[ROW_INDEX_SYMBOL];
 
             if (deleteControlProp) {
-                // --- 🟡 SOFT DELETE (Físicamente es un UPDATE) ---
                 doc[deleteControlProp as keyof SheetDocument<T>] = true as any;
                 if (doc.version !== undefined && typeof doc.setVersion === 'function') {
                     doc.setVersion(doc.version + 1);
@@ -544,29 +523,24 @@ export class SheetsRepository<T extends object, U extends SheetDocument<T> = She
 
                 await this.dataSource.dispatchMutation(
                     this.entityClass,
-                    'UPDATE' as TypeOp, // Despachamos un UPDATE porque Sheets solo actualizará la celda
+                    'UPDATE' as TypeOp,
                     payload,
                     { rowIndex, values: rawRowValues }
                 );
             } else {
-                // --- 🔴 HARD DELETE (Físicamente destruir la fila) ---
                 const payload = doc.toJSON();
 
                 await this.dataSource.dispatchMutation(
                     this.entityClass,
                     'DELETE' as TypeOp,
                     payload,
-                    { rowIndex } // Al trigger de borrado solo le interesa saber el número de fila
+                    { rowIndex }
                 );
             }
         }));
     }
 
-
-
     createAggregation(): AggregationBuilder {
         return this.aggregationFactory.create();
     }
-
-
 }
