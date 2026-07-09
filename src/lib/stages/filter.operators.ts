@@ -128,3 +128,94 @@ export class RegexOperator implements IExpressionOperator {
         }
     }
 }
+
+// =========================================================================
+// 1. COMPARACIÓN POR MISMA SEMANA DEL AÑO ($sameWeek)
+// =========================================================================
+@Injectable()
+export class SameWeekOperator implements IExpressionOperator {
+    readonly name = '$sameWeek';
+    readonly schema = ['val1', 'val2']; // val1 viene del campo, val2 del filtro
+
+    exec(args: any, record: any, engine: any): boolean {
+        const d1 = engine.safeDayjs(args.val1);
+        const d2 = engine.safeDayjs(args.val2);
+        if (!d1 || !d2) return false;
+
+        // Compara que estén en el mismo año y en el mismo número de semana
+        return d1.year() === d2.year() && d1.week() === d2.week();
+    }
+}
+
+// =========================================================================
+// 2. FILTRO POR DÍA DE LA SEMANA ($dayOfWeek)
+// =========================================================================
+// Ejemplo de uso en filtro: { fecha: { $dayOfWeek: 1 } } -> (1 = Lunes, 0 = Domingo)
+@Injectable()
+export class DayOfWeekOperator implements IExpressionOperator {
+    readonly name = '$dayOfWeek';
+    readonly schema = ['val1', 'val2'];
+
+    exec(args: any, record: any, engine: any): boolean {
+        const d = engine.safeDayjs(args.val1);
+        if (!d) return false;
+
+        const targetDay = Number(engine.evaluate(args.val2, record));
+        return d.day() === targetDay;
+    }
+}
+
+// =========================================================================
+// 3. FILTRO POR AÑO Y SEMANA ESPECÍFICA ($yearWeek)
+// =========================================================================
+// Ejemplo: { fecha: { $yearWeek: "2026-W28" } } o { fecha: { $yearWeek: { year: 2026, week: 28 } } }
+@Injectable()
+export class YearWeekOperator implements IExpressionOperator {
+    readonly name = '$yearWeek';
+    readonly schema = ['val1', 'val2'];
+
+    exec(args: any, record: any, engine: any): boolean {
+        const d = engine.safeDayjs(args.val1);
+        if (!d) return false;
+
+        const target = args.val2;
+        let targetYear: number, targetWeek: number;
+
+        if (typeof target === 'string' && target.includes('-W')) {
+            const [y, w] = target.split('-W');
+            targetYear = Number(y);
+            targetWeek = Number(w);
+        } else if (typeof target === 'object') {
+            targetYear = Number(target.year);
+            targetWeek = Number(target.week);
+        } else {
+            return false;
+        }
+
+        return d.year() === targetYear && d.week() === targetWeek;
+    }
+}
+
+// =========================================================================
+// 4. RANGO DE FECHAS ($dateBetween)
+// =========================================================================
+// Ejemplo: { fecha: { $dateBetween: ["2026-07-01", "2026-07-31"] } }
+@Injectable()
+export class DateBetweenOperator implements IExpressionOperator {
+    readonly name = '$dateBetween';
+    readonly schema = ['val1', 'val2']; // val2 será el array [start, end]
+
+    exec(args: any, record: any, engine: any): boolean {
+        const d = engine.safeDayjs(args.val1);
+        if (!d || !Array.isArray(args.val2) || args.val2.length !== 2) return false;
+
+        const start = engine.safeDayjs(args.val2[0]);
+        const end = engine.safeDayjs(args.val2[1]);
+
+        if (!start || !end) return false;
+
+        // Compara inclusivo (>= start && <= end)
+        return (d.isSame(start, 'day') || d.isAfter(start, 'day')) &&
+            (d.isSame(end, 'day') || d.isBefore(end, 'day'));
+    }
+}

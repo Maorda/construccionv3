@@ -16,10 +16,9 @@
     "dist"
   ],
   "scripts": {
-    "build:ts": "tsup src/index.ts --format cjs,esm --dts --clean",
-    "build:gas": "node scripts/build-gas.js",
-    "build": "npm run build:ts && npm run build:gas",
-    "dev": "npm run build:ts && npm run build:gas && tsup src/index.ts --format cjs,esm --watch --dts",
+    "build:ts": "tsup",
+    "build": "npm run build:ts",
+    "dev": "tsup --watch",
     "test": "jest",
     "start:dev": "ts-node-dev -r tsconfig-paths/register --respawn --transpile-only src/main.ts",
     "prepublishOnly": "npm run build"

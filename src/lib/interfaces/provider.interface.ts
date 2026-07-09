@@ -1,19 +1,20 @@
 import { PoolClient, QueryResult, QueryResultRow } from 'pg';
-export interface IBaseProvider {
-    checkHealth(): Promise<{ status: 'up' | 'down'; message?: string }>;
-    connect(): Promise<void>;
-    disconnect(): Promise<void>;
+export abstract class IBaseProvider {
+    abstract checkHealth(): Promise<{ status: 'up' | 'down'; message?: string }>;
+    abstract connect(): Promise<void>;
+    abstract disconnect(): Promise<void>;
 }
 
-export interface IGoogleSheetProvider extends IBaseProvider { }
+export abstract class IGoogleSheetProvider extends IBaseProvider { }
 
-export interface IProvider {
-    checkHealth(): Promise<{ status: 'up' | 'down'; latency?: number; message?: string }>;
-    connect(): Promise<void>;
-    disconnect(): Promise<void>;
+export abstract class IProvider {
+    abstract checkHealth(): Promise<{ status: 'up' | 'down'; latency?: number; message?: string }>;
+    abstract connect(): Promise<void>;
+    abstract disconnect(): Promise<void>;
 }
 
-export interface IPostgresProvider extends IProvider {
-    // Ahora T está obligado a ser un objeto compatible con las filas de Postgres
-    query<T extends QueryResultRow = any>(text: string, params?: any[]): Promise<QueryResult<T>>; getClient(): Promise<PoolClient>;
+// 🟢 SOLUCIÓN: Transmutado a Clase Abstracta para compatibilidad nativa en los builds de NestJS
+export abstract class IPostgresProvider extends IProvider {
+    abstract query<T extends QueryResultRow = any>(text: string, params?: any[]): Promise<QueryResult<T>>;
+    abstract getClient(): Promise<PoolClient>;
 }

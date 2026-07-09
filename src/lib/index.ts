@@ -1,16 +1,26 @@
-// 1. Módulos principales (Lo que ya tienes)
+// ============================================================================
+// @sheetodm/core - Punto de Entrada Principal (NPM Public API)
+// ============================================================================
+
+// 1. Módulo Principal de NestJS
 export * from './sheetOdm.module';
 export { DataSourceManager } from './core/data-source-manager';
 
-// 2. Decoradores (Lo que el usuario usará diariamente para definir sus entidades)
-// Debes exportar tus decoradores aquí para que los usen en sus clases
-export * from './core/decorators/index'; // Asumiendo que tienes un index.ts en tu carpeta decorators
+// 2. Opciones de Configuración y Clases de Contrato
+export * from './interfaces/sheet-odm-options.interface';
+export * from './interfaces/provider.interface';
 
-// 3. Tipos y Utilidades Globales (Aquí entra el ClassType que mencionamos)
+// 3. Decoradores del ODM (Lo que el desarrollador usa en sus clases/entidades)
+export * from './core/decorators/index';
+
+// 4. Tipos, Constantes y Utilidades Globales
 export * from './core/types/common.types';
+export * from './shared/constants/constants';
 
-// 4. Interfaces de Configuración (Para que sepan cómo configurar @Column, etc.)
+// 5. Interfaces de Metadatos (Tipados para configuración interna de columnas, etc.)
 export * from './core/metadata/interfaces/index';
 
-// 5. Servicios (Opcional, pero recomendado si necesitan acceder al MetadataRegistry)
+// 6. Servicios Auxiliares Exponibles para el Usuario Final
 export { MetadataRegistry } from './JoinSheetTabs/metadata.registry';
+export { RepositoryCoreFacade } from './core/repository/repository-core.facade';
+export { SheetsRepository } from './core/repository/sheets.repository';

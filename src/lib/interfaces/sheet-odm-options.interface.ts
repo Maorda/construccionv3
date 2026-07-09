@@ -1,8 +1,9 @@
 // src/lib/interfaces/sheet-odm-options.interface.ts
 import { ModuleMetadata, Type } from '@nestjs/common';
 
-export interface GoogleDriveConfig {
-    type: string;
+
+export class GoogleDriveConfig {
+    type!: string;
     project_id?: string;
     private_key_id?: string;
     private_key?: string;
@@ -15,52 +16,35 @@ export interface GoogleDriveConfig {
     universe_domain?: string;
 }
 
-// Tiempos de estabilidad basados en realidades de red complejas
 export const CONNECTION_STABILITY = {
     STABLE: 1500,     // Conexión óptima
     UNSTABLE: 3000,   // Conexión promedio/oscilante
     CRITICAL: 5000    // Conexión muy lenta (Satélite/Radio)
 };
 
-export interface SheetOdmModuleOptions {
+export class PostgresConfig {
+    host!: string;
+    port!: number;
+    username!: string;
+    password?: string;
+    database!: string;
+    ssl?: boolean;
+}
 
-    // Nueva propiedad: Acepta formatos nativos de Postgres como '2 hours', '1 day', '30 minutes'
+// 🟢 SOLUCIÓN: Al ser una clase abstracta, esbuild la empaqueta de forma nativa como código JS real
+export abstract class SheetOdmModuleOptions {
     outboxRetentionInterval?: string;
-    /** Configuración completa del Service Account de Google (JSON) */
-    googleDriveConfig: GoogleDriveConfig;
-
-    /** ID de la carpeta raíz en Drive donde se gestionan los archivos */
-    googleDriveBaseFolderId: string;
-
-    /** ID del Spreadsheet principal por defecto */
+    googleDriveConfig!: GoogleDriveConfig;
+    googleDriveBaseFolderId!: string;
     spreadsheetId?: string;
-
-    /** Si es true, el HealthCheck se ejecuta al arrancar */
     checkConnectionOnBoot?: boolean;
-    /** URL de la Web App desplegada en Google Apps Script */
-    webAppUrl: string;
-    /** Clave de autorización para proteger tu endpoint de GAS */
-    apiKey: string;
-    /** Tiempo máximo de espera en milisegundos para las peticiones a GAS (Opcional) */
-
-    /** Tiempo de espera máximo para respuestas de la API de Google (ms) */
+    webAppUrl!: string;
+    apiKey!: string;
     timeout?: number;
-
-    timezone?: string; // Ejemplo: 'America/Lima'
+    timezone?: string;
     formatDates?: boolean;
     outboxPollingInterval?: number;
-
-    /** * Configuración de conexión para PostgreSQL 
-     * (La agregamos aquí para que forRoot configure ambos mundos a la vez)
-     */
-    postgres: {
-        host: string;
-        port: number;
-        username: string;
-        password?: string;
-        database: string;
-        ssl?: boolean;
-    };
+    postgres!: PostgresConfig;
 }
 
 export interface SheetOdmModuleAsyncOptions extends Pick<ModuleMetadata, 'imports'> {

@@ -240,22 +240,40 @@ export class AggregateOperator implements IExpressionOperator {
 }
 @Injectable()
 export class DateTransformer {
-    // Estándar de entrada (el que llega de Insomnia / Sistema)
     static readonly INPUT_FORMAT = 'YYYY-MM-DD';
-    // Estándar de salida (el que Sheets exige)
     static readonly SHEET_FORMAT = 'DD/MM/YY';
+    // Podemos añadir un timezone por defecto si tu sistema lo requiere (ej. Lima/Perú)
+    static readonly DEFAULT_TIMEZONE = 'America/Lima';
 
     static toSheet(val: any): string {
         if (!val) return '';
-        // Si ya es un objeto Date o string ISO, lo convierte a DD/MM/YY
-        const d = dayjs(val);
-        return d.isValid() ? d.format(this.SHEET_FORMAT) : val;
+        const d = this.parse(val);
+        return d && d.isValid() ? d.format(this.SHEET_FORMAT) : val;
     }
 
     static fromSheet(val: any): string {
         if (!val) return '';
-        // Intenta parsear DD/MM/YY (ej: "05/07/26")
-        const d = dayjs(val, this.SHEET_FORMAT);
-        return d.isValid() ? d.format(this.INPUT_FORMAT) : val;
+        const d = this.parse(val);
+        return d && d.isValid() ? d.format(this.INPUT_FORMAT) : val;
+    }
+
+    /**
+     * 🚀 Método universal de parseo inteligente.
+     * Intenta parsear por formato Sheets, por formato ISO o como timestamp/Date.
+     */
+    static parse(val: any): dayjs.Dayjs | null {
+        if (!val || String(val).trim() === '') return null;
+
+        // 1. Intentar parseo estricto del formato de Sheets (ej: "05/07/26")
+        let d = dayjs(val, this.SHEET_FORMAT, true);
+        if (d.isValid()) return d;
+
+        // 2. Intentar parseo con formato extendido DD/MM/YYYY
+        d = dayjs(val, 'DD/MM/YYYY', true);
+        if (d.isValid()) return d;
+
+        // 3. Fallback al parser estándar de dayjs (ISO, YYYY-MM-DD, Date object, Unix timestamp)
+        d = dayjs(val);
+        return d.isValid() ? d : null;
     }
 }

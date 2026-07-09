@@ -1,11 +1,12 @@
 import { Inject, Injectable, Logger } from "@nestjs/common";
 import dayjs from 'dayjs';
-import utc from 'dayjs/plugin/utc.js';
-import timezone from 'dayjs/plugin/timezone.js';
-import customParseFormat from 'dayjs/plugin/customParseFormat.js';
-import weekOfYear from 'dayjs/plugin/weekOfYear.js';
-import { IExpressionOperator } from "./IExpressionOperator.js";
+import utc from 'dayjs/plugin/utc';
+import timezone from 'dayjs/plugin/timezone';
+import customParseFormat from 'dayjs/plugin/customParseFormat';
+import weekOfYear from 'dayjs/plugin/weekOfYear';
+import { IExpressionOperator } from "./IExpressionOperator";
 import { DATA_TRANSFORM_OPERATOR, FILTER_OPERATOR } from "./pipeline.constants";
+import { DateTransformer } from "./transform.operators";
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -138,7 +139,18 @@ export class ExpressionEngine {
 
     private compareValue(fieldValue: any, condition: any, record: any): boolean {
         if (condition === null || typeof condition !== 'object' || condition instanceof Date) {
-            return fieldValue === condition;
+            // 🚀 MEJORA: Si la igualdad directa falla, verificamos si ambos son fechas equivalentes
+            if (fieldValue === condition) return true;
+
+            const date1 = this.safeDayjs(fieldValue);
+            const date2 = this.safeDayjs(condition);
+
+            // Si ambos se pudieron parsear como fecha, comparamos por día (YYYY-MM-DD)
+            if (date1 && date2 && date1.isValid() && date2.isValid()) {
+                return date1.format('YYYY-MM-DD') === date2.format('YYYY-MM-DD');
+            }
+
+            return false;
         }
 
         return Object.entries(condition).every(([operator, targetValue]) => {
@@ -153,7 +165,6 @@ export class ExpressionEngine {
                 options: condition['$options'] || 'i'
             };
 
-            // 🟢 ROBUSTEZ: Pasamos el 'record' en lugar de un objeto vacío {} por si el operador requiere contexto
             return !!this.runOperator(operator, args, record);
         });
     }
@@ -171,9 +182,7 @@ export class ExpressionEngine {
     }
 
     public safeDayjs(val: any): dayjs.Dayjs | null {
-        if (val === undefined || val === null || String(val).trim() === '') return null;
-        const d = dayjs(val);
-        return d.isValid() ? d : null;
+        return DateTransformer.parse(val);
     }
 
     private isOperatorObject(obj: any): boolean {
